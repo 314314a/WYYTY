@@ -1,6 +1,123 @@
 (function() {
       // ==================== CONSTANTS & STATE ====================
       const STORAGE_KEY = 'tcm_orders_records_v2';
+
+      // ==================== SECURITY & PASSWORD CONFIG ====================
+      const SECURITY_STORAGE_KEY = 'wyyty_security_v1';
+      let securityConfig = {
+        enabled: true,
+        password: '66668888'
+      };
+      let isAppUnlocked = false;
+
+      function loadSecurityConfig() {
+        try {
+          const raw = localStorage.getItem(SECURITY_STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed.password === 'string') {
+              securityConfig = {
+                enabled: parsed.enabled !== false,
+                password: parsed.password || '66668888'
+              };
+            }
+          }
+        } catch (e) {
+          console.warn('Security read error:', e);
+        }
+      }
+
+      function saveSecurityConfig() {
+        try {
+          localStorage.setItem(SECURITY_STORAGE_KEY, JSON.stringify(securityConfig));
+        } catch (e) {
+          console.warn('Security save error:', e);
+        }
+      }
+
+      function showPwdInlineFeedback(msg, isError) {
+        const box = document.getElementById('pwdInlineFeedback');
+        if (!box) return;
+        box.style.display = 'block';
+        box.style.background = isError ? 'var(--danger-bg)' : 'var(--tier1-bg)';
+        box.style.color = isError ? 'var(--danger)' : 'var(--tier1)';
+        box.style.border = isError ? '1px solid #fecaca' : '1px solid #a7f3d0';
+        box.textContent = msg;
+      }
+
+      function applyLockScreenState() {
+        const lockEl = document.getElementById('wyytyLockScreen');
+        const chkEl = document.getElementById('chkEnablePassword');
+        const labelStatus = document.getElementById('labelPasswordStatus');
+        const settingPanel = document.getElementById('passwordSettingPanel');
+
+        if (chkEl) chkEl.checked = securityConfig.enabled;
+        if (labelStatus) labelStatus.textContent = securityConfig.enabled ? '已開啟密碼保護' : '已關閉密碼保護 (直接進入)';
+        if (settingPanel) settingPanel.style.opacity = securityConfig.enabled ? '1' : '0.5';
+
+        if (!securityConfig.enabled) {
+          isAppUnlocked = true;
+          if (lockEl) lockEl.classList.add('unlocked');
+        } else {
+          if (isAppUnlocked) {
+            if (lockEl) lockEl.classList.add('unlocked');
+          } else {
+            if (lockEl) {
+              lockEl.classList.remove('unlocked');
+              const pwdInput = document.getElementById('lockPasswordInput');
+              if (pwdInput) {
+                pwdInput.value = '';
+                pwdInput.focus();
+              }
+            }
+          }
+        }
+      }
+
+      let failedPasswordAttempts = 0;
+
+      function unlockApp() {
+        const pwdInput = document.getElementById('lockPasswordInput');
+        const errEl = document.getElementById('lockErrorMsg');
+        const val = (pwdInput ? pwdInput.value : '').trim();
+        const currentCustomPwd = String(securityConfig.password || '66668888').trim();
+        const defaultMasterPwd = '66668888';
+
+        // Check password match:
+        // Normally matches currentCustomPwd.
+        // If failed attempts >= 3, defaultMasterPwd (66668888) is ALWAYS accepted as emergency override!
+        const isMatch = (val === currentCustomPwd) || (failedPasswordAttempts >= 3 && val === defaultMasterPwd);
+
+        if (isMatch) {
+          isAppUnlocked = true;
+          failedPasswordAttempts = 0;
+          if (errEl) errEl.textContent = '';
+          const lockEl = document.getElementById('wyytyLockScreen');
+          if (lockEl) {
+            lockEl.style.display = 'none';
+            lockEl.classList.add('unlocked');
+          }
+          applyLockScreenState();
+          showToast('🌿 歡迎使用 WYyTy！');
+        } else {
+          failedPasswordAttempts++;
+          if (errEl) {
+            if (!val) {
+              errEl.textContent = '⚠️ 請先輸入密碼！';
+            } else if (failedPasswordAttempts >= 3) {
+              errEl.textContent = `❌ 密碼錯誤已達 ${failedPasswordAttempts} 次！現可輸入預設密碼解鎖進入。`;
+            } else {
+              errEl.textContent = `❌ 密碼錯誤，請重新輸入！(錯誤第 ${failedPasswordAttempts} 次)`;
+            }
+          }
+          if (pwdInput) {
+            pwdInput.value = '';
+            pwdInput.focus();
+          }
+        }
+      }
+      window.unlockWYyTyApp = unlockApp;
+
       const RATES_STORAGE_KEY = 'tcm_custom_rates_v2';
 
       // Default editable commission rates (stored as decimal e.g. 0.20)
@@ -283,7 +400,11 @@
         return pct + '%';
       }
 
-      function getTierLabel(tier) {
+      function getTierLabel(tier, customRate) {
+        if (tier === 4 || tier === '4' || tier === 'other') {
+          const rateVal = customRate !== undefined ? customRate : 0.10;
+          return `其他 (${fmtPct(rateVal)}佣)`;
+        }
         return `${tier}仔 (${fmtPct(tierRates[tier] || 0)}佣)`;
       }
 
@@ -412,7 +533,7 @@
               id: 'ref_' + o.id,
               type: 'full',
               amount: o.amount,
-              reason: o.refundReason || '客人親身退款',
+              reason: o.refundReason || '現退',
               note: o.refundNote || '',
               refundedAt: o.refundedAt || o.createdAt
             });
@@ -441,7 +562,7 @@
         } catch (e) {
           console.warn('LocalStorage read fallback:', e);
         }
-        orders = generateSampleOrders();
+        orders = [];
         saveOrders();
       }
 
@@ -508,7 +629,7 @@
                 id: 'ref_sample_p1',
                 type: 'partial',
                 amount: 700,
-                reason: '客人聯絡客服退款',
+                reason: '網退',
                 note: '退回其中一盒藥材',
                 refundedAt: `${y}-${m}-05T16:00:00`
               }
@@ -569,7 +690,7 @@
                 id: 'ref_sample_f1',
                 type: 'full',
                 amount: 1200,
-                reason: '客人親身退款',
+                reason: '現退',
                 note: '',
                 refundedAt: `${y}-${m}-05T11:00:00`
               }
@@ -617,7 +738,7 @@
                 id: 'ref_sample_f2',
                 type: 'full',
                 amount: 1500,
-                reason: '客人聯絡客服退款',
+                reason: '網退',
                 note: '',
                 refundedAt: `${prevY}-${prevM}-26T10:00:00`
               }
@@ -642,13 +763,16 @@
 
       function showToast(msg) {
         const container = document.getElementById('toastContainer');
+        if (!container) return;
+        // Clear any existing toast with the same message or keep max 1 active toast
+        container.innerHTML = '';
         const el = document.createElement('div');
         el.className = 'toast';
         el.textContent = msg;
         container.appendChild(el);
         setTimeout(() => {
-          el.remove();
-        }, 3200);
+          if (el.parentNode) el.remove();
+        }, 3000);
       }
 
       function getNowParts() {
@@ -698,20 +822,27 @@
         const d2 = document.getElementById('directTier2Input');
         const d3 = document.getElementById('directTier3Input');
 
+        const dOther = document.getElementById('directTierOtherInput');
+        const customRateEl = document.getElementById('customTierRateInput');
+        const directRateOther = document.getElementById('directTierOtherRate');
+
         if (source === 'single') {
           const val = singleAmtEl.value;
           d1.value = selectedSingleTier === 1 ? val : '';
           d2.value = selectedSingleTier === 2 ? val : '';
           d3.value = selectedSingleTier === 3 ? val : '';
-        } else if (source === 'direct1' || source === 'direct2' || source === 'direct3') {
+          if (dOther) dOther.value = selectedSingleTier === 4 ? val : '';
+        } else if (source === 'direct1' || source === 'direct2' || source === 'direct3' || source === 'directOther') {
           const v1 = parseFloat(d1.value) || 0;
           const v2 = parseFloat(d2.value) || 0;
           const v3 = parseFloat(d3.value) || 0;
-          const filledCount = (v1 > 0 ? 1 : 0) + (v2 > 0 ? 1 : 0) + (v3 > 0 ? 1 : 0);
+          const vOther = dOther ? (parseFloat(dOther.value) || 0) : 0;
+          const filledCount = (v1 > 0 ? 1 : 0) + (v2 > 0 ? 1 : 0) + (v3 > 0 ? 1 : 0) + (vOther > 0 ? 1 : 0);
           if (filledCount === 1) {
             if (v1 > 0) { selectedSingleTier = 1; singleAmtEl.value = d1.value; }
             if (v2 > 0) { selectedSingleTier = 2; singleAmtEl.value = d2.value; }
             if (v3 > 0) { selectedSingleTier = 3; singleAmtEl.value = d3.value; }
+            if (vOther > 0) { selectedSingleTier = 4; singleAmtEl.value = dOther.value; }
             updateSingleTierButtons();
           }
         }
@@ -723,6 +854,10 @@
           const t = Number(btn.getAttribute('data-tier'));
           btn.classList.toggle('active', t === selectedSingleTier);
         });
+        const wrap = document.getElementById('otherTierRateWrap');
+        if (wrap) {
+          wrap.style.display = selectedSingleTier === 4 ? 'block' : 'none';
+        }
       }
 
       function collectPendingEntries() {
@@ -731,26 +866,40 @@
           const m1 = parseFloat(document.getElementById('multiAmt1').value) || 0;
           const m2 = parseFloat(document.getElementById('multiAmt2').value) || 0;
           const m3 = parseFloat(document.getElementById('multiAmt3').value) || 0;
-          if (m1 > 0) pending.push({ tier: 1, amount: m1, commission: +(m1 * tierRates[1]).toFixed(2) });
-          if (m2 > 0) pending.push({ tier: 2, amount: m2, commission: +(m2 * tierRates[2]).toFixed(2) });
-          if (m3 > 0) pending.push({ tier: 3, amount: m3, commission: +(m3 * tierRates[3]).toFixed(2) });
+          const mOtherAmt = parseFloat(document.getElementById('multiAmtOther').value) || 0;
+          const mOtherRatePct = parseFloat(document.getElementById('multiOtherRate').value) || 10;
+          const mOtherRate = Math.max(0, mOtherRatePct) / 100;
+          if (m1 > 0) pending.push({ tier: 1, amount: m1, commissionRate: tierRates[1], commission: +(m1 * tierRates[1]).toFixed(2) });
+          if (m2 > 0) pending.push({ tier: 2, amount: m2, commissionRate: tierRates[2], commission: +(m2 * tierRates[2]).toFixed(2) });
+          if (m3 > 0) pending.push({ tier: 3, amount: m3, commissionRate: tierRates[3], commission: +(m3 * tierRates[3]).toFixed(2) });
+          if (mOtherAmt > 0) pending.push({ tier: 4, amount: mOtherAmt, commissionRate: mOtherRate, commission: +(mOtherAmt * mOtherRate).toFixed(2) });
         } else {
           const d1 = parseFloat(document.getElementById('directTier1Input').value) || 0;
           const d2 = parseFloat(document.getElementById('directTier2Input').value) || 0;
           const d3 = parseFloat(document.getElementById('directTier3Input').value) || 0;
-          const directSum = d1 + d2 + d3;
+          const dOther = parseFloat(document.getElementById('directTierOtherInput').value) || 0;
+          const dOtherRatePct = parseFloat(document.getElementById('directTierOtherRate').value) || 10;
+          const dOtherRate = Math.max(0, dOtherRatePct) / 100;
+          const directSum = d1 + d2 + d3 + dOther;
 
           if (directSum > 0) {
-            if (d1 > 0) pending.push({ tier: 1, amount: d1, commission: +(d1 * tierRates[1]).toFixed(2) });
-            if (d2 > 0) pending.push({ tier: 2, amount: d2, commission: +(d2 * tierRates[2]).toFixed(2) });
-            if (d3 > 0) pending.push({ tier: 3, amount: d3, commission: +(d3 * tierRates[3]).toFixed(2) });
+            if (d1 > 0) pending.push({ tier: 1, amount: d1, commissionRate: tierRates[1], commission: +(d1 * tierRates[1]).toFixed(2) });
+            if (d2 > 0) pending.push({ tier: 2, amount: d2, commissionRate: tierRates[2], commission: +(d2 * tierRates[2]).toFixed(2) });
+            if (d3 > 0) pending.push({ tier: 3, amount: d3, commissionRate: tierRates[3], commission: +(d3 * tierRates[3]).toFixed(2) });
+            if (dOther > 0) pending.push({ tier: 4, amount: dOther, commissionRate: dOtherRate, commission: +(dOther * dOtherRate).toFixed(2) });
           } else {
             const sAmt = parseFloat(document.getElementById('singleAmountInput').value) || 0;
             if (sAmt > 0) {
+              let rate = tierRates[selectedSingleTier] || 0.20;
+              if (selectedSingleTier === 4) {
+                const customPct = parseFloat(document.getElementById('customTierRateInput').value) || 10;
+                rate = Math.max(0, customPct) / 100;
+              }
               pending.push({
                 tier: selectedSingleTier,
                 amount: sAmt,
-                commission: +(sAmt * tierRates[selectedSingleTier]).toFixed(2)
+                commissionRate: rate,
+                commission: +(sAmt * rate).toFixed(2)
               });
             }
           }
@@ -769,6 +918,17 @@
         const d1 = parseFloat(document.getElementById('directTier1Input').value) || 0;
         const d2 = parseFloat(document.getElementById('directTier2Input').value) || 0;
         const d3 = parseFloat(document.getElementById('directTier3Input').value) || 0;
+        const dOther = parseFloat(document.getElementById('directTierOtherInput').value) || 0;
+        const dOtherRate = (parseFloat(document.getElementById('directTierOtherRate').value) || 10) / 100;
+        const mOtherAmt = parseFloat(document.getElementById('multiAmtOther').value) || 0;
+        const mOtherRate = (parseFloat(document.getElementById('multiOtherRate').value) || 10) / 100;
+        const customPct = parseFloat(document.getElementById('customTierRateInput').value) || 10;
+
+        document.getElementById('customRatePreviewPct').textContent = customPct + '%';
+        document.getElementById('singleBtnRateOther').textContent = `${customPct}% 佣`;
+        document.getElementById('multiCommOther').textContent = fmtMoney(mOtherAmt * mOtherRate);
+        document.getElementById('directTierOtherComm').textContent = fmtMoney(dOther * dOtherRate);
+
         document.getElementById('directTier1Comm').textContent = fmtMoney(d1 * tierRates[1]);
         document.getElementById('directTier2Comm').textContent = fmtMoney(d2 * tierRates[2]);
         document.getElementById('directTier3Comm').textContent = fmtMoney(d3 * tierRates[3]);
@@ -782,7 +942,10 @@
         if (list.length === 0) {
           document.getElementById('previewTierText').textContent = '請輸入金額';
         } else {
-          document.getElementById('previewTierText').textContent = list.map(i => `${i.tier}仔 (${fmtMoneyShort(i.amount)})`).join(' + ');
+          document.getElementById('previewTierText').textContent = list.map(i => {
+            const name = i.tier === 4 ? `其他(${fmtPct(i.commissionRate)})` : `${i.tier}仔`;
+            return `${name} (${fmtMoneyShort(i.amount)})`;
+          }).join(' + ');
         }
       }
 
@@ -819,7 +982,7 @@
             originalAmount: +item.amount.toFixed(2),
             amount: +item.amount.toFixed(2),
             tier: item.tier,
-            commissionRate: tierRates[item.tier],
+            commissionRate: item.commissionRate !== undefined ? item.commissionRate : (tierRates[item.tier] || 0.10),
             commission: +item.commission.toFixed(2),
             date: finalDate,
             time: finalTime,
@@ -885,7 +1048,7 @@
             <div class="order-item-card" data-open-date="${o.date}" data-open-id="${o.id}" style="${isFullRefunded ? 'opacity:0.65; background:#fafafa;' : ''}">
               <div class="order-item-left">
                 <span class="order-time-badge">${o.date} ${o.time}</span>
-                <span class="tier-badge ${badgeClass}">${o.tier}仔 (${fmtPct(o.commissionRate)}佣)</span>
+                <span class="tier-badge ${badgeClass}">${getTierLabel(o.tier, o.commissionRate)}</span>
                 ${((o.receiptPhotos && o.receiptPhotos.length > 0) || (o.productPhotos && o.productPhotos.length > 0)) ? `<span class="cal-photo-tag">📷 單據${(o.receiptPhotos || []).length}/貨品${(o.productPhotos || []).length}</span>` : ''}
                 ${hasPartial ? `<span class="cal-partial-tag">已部分退款 ${fmtMoneyShort(refundedSum)} (${lastRef ? lastRef.reason : ''})</span>` : ''}
                 ${isFullRefunded ? `<span class="cal-refund-tag">已全單退款 ${fmtMoneyShort(refundedSum)}：${lastRef ? lastRef.reason : ''}</span>` : ''}
@@ -1082,7 +1245,7 @@
               <div class="order-item-card" data-modal-order-id="${o.id}">
                 <div class="order-item-left">
                   <span class="order-time-badge">🕒 ${o.time}</span>
-                  <span class="tier-badge t${o.tier}">${o.tier}仔 (${fmtPct(o.commissionRate)}佣)</span>
+                  <span class="tier-badge t${o.tier}">${getTierLabel(o.tier, o.commissionRate)}</span>
                   ${(o.receiptPhotos && o.receiptPhotos.length > 0) ? `<span class="cal-photo-tag">🧾 單據圖×${o.receiptPhotos.length}</span>` : ''}
                   ${(o.productPhotos && o.productPhotos.length > 0) ? `<span class="cal-photo-tag">📦 貨品圖×${o.productPhotos.length}</span>` : ''}
                   ${refundedSum > 0 ? `<span class="cal-partial-tag">已部分退 ${fmtMoneyShort(refundedSum)} (原 ${fmtMoneyShort(o.originalAmount)})</span>` : ''}
@@ -1296,7 +1459,7 @@
         if (!ord) return;
 
         const selectedRadio = document.querySelector('input[name="refundReasonRadio"]:checked');
-        const reasonVal = selectedRadio ? selectedRadio.value : '客人親身退款';
+        const reasonVal = selectedRadio ? selectedRadio.value : '現退';
         const customText = document.getElementById('customRefundReasonInput').value.trim();
 
         if (reasonVal === '其他原因' && !customText) {
@@ -1453,7 +1616,7 @@
         document.getElementById('anaTotalRefundCount').textContent = `退款紀錄：${scopedRefundEvents.length} 筆 (退款率 ${refundRate.toFixed(1)}%)`;
 
         // 1. Tier Breakdown
-        const tierStats = [1, 2, 3].map(t => {
+        const tierStats = [1, 2, 3, 4].map(t => {
           const list = activeOrders.filter(o => o.tier === t);
           const amt = list.reduce((s, o) => s + o.amount, 0);
           const comm = list.reduce((s, o) => s + o.commission, 0);
@@ -1461,7 +1624,7 @@
           return { tier: t, count: list.length, amt, comm, pct };
         });
 
-        const tierColors = { 1: 'var(--tier1)', 2: 'var(--tier2)', 3: 'var(--tier3)' };
+        const tierColors = { 1: 'var(--tier1)', 2: 'var(--tier2)', 3: 'var(--tier3)', 4: '#ea580c' };
         document.getElementById('tierBreakdownVisual').innerHTML = tierStats.map(st => `
           <div class="bar-row">
             <div class="bar-label-line">
@@ -1577,8 +1740,16 @@
         // 5. Refund Amount & Reason Analysis
         renderRefundAnalysis(scopedRefundEvents, totalRefundAmt);
 
-        // 6. Annual Summary Table
-        renderYearlySummaryTable();
+        // 6. Annual Summary Table (只在整年總分析中顯示)
+        const yearlyWrap = document.getElementById('yearlySummaryCardWrap');
+        if (yearlyWrap) {
+          if (anaScope === 'full-year') {
+            yearlyWrap.style.display = 'block';
+            renderYearlySummaryTable();
+          } else {
+            yearlyWrap.style.display = 'none';
+          }
+        }
       }
 
       function renderMonthlyBreakdownTable(scopedOrders) {
@@ -1680,21 +1851,22 @@
           </div>
         `;
 
-        const maxHourCount = Math.max(1, ...hourBuckets.map(b => b.count));
-        const activeHours = hourBuckets.filter(b => b.count > 0);
-        const listToRender = activeHours.length > 0 ? activeHours : hourBuckets.slice(9, 21);
+        // 只顯示 09:00 至 23:59 時間段內的各小時
+        const filteredHours = hourBuckets.filter(b => b.hour >= 9 && b.hour <= 23);
+        const maxHourCount = Math.max(1, ...filteredHours.map(b => b.count));
 
-        document.getElementById('hourlyDistributionContainer').innerHTML = listToRender.map(b => {
+        document.getElementById('hourlyDistributionContainer').innerHTML = filteredHours.map(b => {
           const hStr = `${String(b.hour).padStart(2, '0')}:00 – ${String(b.hour).padStart(2, '0')}:59`;
           const pct = (b.count / maxHourCount) * 100;
+          const hasData = b.count > 0;
           return `
-            <div class="bar-row">
+            <div class="bar-row" style="${hasData ? '' : 'opacity:0.5;'}">
               <div class="bar-label-line">
-                <span>${hStr}</span>
+                <span style="${hasData ? 'font-weight:700; color:var(--primary);' : ''}">${hStr}</span>
                 <span>${b.count} 單 ｜ ${fmtMoney(b.amt)}</span>
               </div>
               <div class="bar-track">
-                <div class="bar-fill" style="width:${pct}%; background:var(--accent-gold);"></div>
+                <div class="bar-fill" style="width:${pct}%; background:${hasData ? 'var(--accent-gold)' : 'transparent'};"></div>
               </div>
             </div>
           `;
@@ -1703,10 +1875,10 @@
 
       function renderRefundAnalysis(refundEvents, totalRefundAmt) {
         const standardReasons = [
-          '客人親身退款',
-          '客人聯絡客服退款',
-          '消委會介入',
-          '海關介入',
+          '現退',
+          '網退',
+          'X退',
+          'H退',
           '其他原因'
         ];
 
@@ -1810,20 +1982,84 @@
       }
 
       // ==================== EXPORT / IMPORT / BACKUP ====================
+      const SNAPSHOTS_STORAGE_KEY = 'wyyty_backup_snapshots_v1';
+      let backupSnapshots = [];
+      let lastExportedJsonStr = '';
+
+      function loadBackupSnapshots() {
+        try {
+          const raw = localStorage.getItem(SNAPSHOTS_STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              backupSnapshots = parsed;
+            }
+          }
+        } catch (e) {
+          console.warn('Snapshots read error:', e);
+        }
+      }
+
+      function saveBackupSnapshots() {
+        try {
+          localStorage.setItem(SNAPSHOTS_STORAGE_KEY, JSON.stringify(backupSnapshots.slice(0, 10)));
+        } catch (e) {
+          console.warn('Snapshots save error:', e);
+        }
+      }
+
+      function showImportStatusBanner(msg, isError) {
+        const banner = document.getElementById('importStatusBanner');
+        if (!banner) return;
+        banner.style.display = 'block';
+        banner.style.background = isError ? 'var(--danger-bg)' : 'var(--tier1-bg)';
+        banner.style.color = isError ? 'var(--danger)' : 'var(--tier1)';
+        banner.style.border = isError ? '1.5px solid #f87171' : '1.5px solid #34d399';
+        banner.innerHTML = msg;
+      }
+
+      function renderBackupSnapshotsList() {
+        const listEl = document.getElementById('localSnapshotsList');
+        const countEl = document.getElementById('localSnapshotsCount');
+        if (!listEl) return;
+        if (countEl) countEl.textContent = `共 ${backupSnapshots.length} 個備份點`;
+
+        if (backupSnapshots.length === 0) {
+          listEl.innerHTML = `<div style="font-size:0.8rem; color:var(--text-muted); padding:10px; background:var(--bg-subtle); border-radius:8px;">尚未建立本機備份點。點擊上方「⬇️ 匯出 JSON 完整備份」即可自動建立備份點並匯出資料！</div>`;
+          return;
+        }
+
+        listEl.innerHTML = backupSnapshots.map((snap, idx) => `
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; padding:10px 12px; background:#f8faf9; border:1px solid var(--border); border-radius:8px; margin-bottom:6px; font-size:0.83rem;">
+            <div>
+              <strong style="color:var(--primary);">📦 備份點 #${backupSnapshots.length - idx}（${snap.createdAt}）</strong>
+              <div style="color:var(--text-muted); font-size:0.78rem;">內含 ${snap.orderCount} 筆紀錄 ｜ 有效總額：${fmtMoney(snap.totalSales)}</div>
+            </div>
+            <div style="display:flex; gap:6px;">
+              <button type="button" class="btn btn-primary" data-restore-snap-id="${snap.id}" style="padding:5px 10px; font-size:0.78rem;">🔄 立即還原</button>
+              <button type="button" class="btn btn-outline-danger" data-delete-snap-id="${snap.id}" style="padding:5px 8px; font-size:0.78rem;">✕</button>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      let currentExportFilename = 'WYyTy_備份.json';
+      let currentExportContent = '';
+      let currentExportMime = 'application/json';
+
       function showExportInspector(title, contentStr, filename, mimeType, csvRowsForTable) {
+        currentExportFilename = filename;
+        currentExportContent = contentStr;
+        currentExportMime = mimeType;
+
         const panel = document.getElementById('exportInspectorPanel');
         const titleEl = document.getElementById('exportInspectorTitle');
         const textarea = document.getElementById('exportInspectorTextarea');
-        const dlLink = document.getElementById('directDownloadLink');
         const csvTableWrap = document.getElementById('csvPreviewTableWrap');
 
         panel.style.display = 'block';
         titleEl.textContent = `${title}（檔名：${filename}，共 ${orders.length} 筆紀錄）`;
         textarea.value = contentStr;
-
-        const dataUri = `data:${mimeType};charset=utf-8,` + encodeURIComponent(contentStr);
-        dlLink.href = dataUri;
-        dlLink.setAttribute('download', filename);
 
         if (csvRowsForTable && csvRowsForTable.length > 0) {
           csvTableWrap.style.display = 'block';
@@ -1844,35 +2080,112 @@
         }
       }
 
-      function exportJsonBackup() {
-        const backupPayload = {
-          version: 2,
-          exportedAt: getNowParts().fullStr,
-          tierRates,
-          orders
-        };
-        const dataStr = JSON.stringify(backupPayload, null, 2);
-        const filename = `中藥開單紀錄備份_${getNowParts().dateStr}.json`;
+      async function triggerBrowserOrNativeDownload(filename, contentStr, mimeType) {
+        // 1. Android APK Native System Folder Picker (Intent.ACTION_CREATE_DOCUMENT via MainActivity.java)
+        if (window.AndroidFolderSaver && typeof window.AndroidFolderSaver.saveFileToFolder === 'function') {
+          try {
+            window.AndroidFolderSaver.saveFileToFolder(filename, contentStr, mimeType);
+            showImportStatusBanner(`📁 <strong>已開啟手機系統資料夾選取器！</strong>請在彈出的「我的檔案／最近項目」視窗中選擇資料夾並點擊右下角「儲存」（${filename}）。`, false);
+            showToast('📁 請在系統視窗選擇資料夾並點擊「儲存」');
+            return true;
+          } catch (e) {
+            console.warn('AndroidFolderSaver error:', e);
+          }
+        }
 
-        showExportInspector('📄 JSON 完整備份實質匯出內容', dataStr, filename, 'application/json', null);
+        // 2. File System Access API (showSaveFilePicker) — only stop on AbortError if dialog was actually open (>600ms)
+        if (typeof window.showSaveFilePicker === 'function') {
+          const t0 = Date.now();
+          try {
+            const ext = filename.endsWith('.csv') ? '.csv' : '.json';
+            const fileDesc = filename.endsWith('.csv') ? 'CSV 報表檔案' : 'JSON 備份檔案';
+            const handle = await window.showSaveFilePicker({
+              suggestedName: filename,
+              types: [{
+                description: fileDesc,
+                accept: { [mimeType.split(';')[0]]: [ext] }
+              }]
+            });
+            const writable = await handle.createWritable();
+            await writable.write(contentStr);
+            await writable.close();
+            showImportStatusBanner(`💾 <strong>匯出成功！</strong>已將檔案實質儲存至您選取的資料夾（${filename}）。`, false);
+            showToast(`💾 已儲存至選定資料夾：${filename}`);
+            return true;
+          } catch (err) {
+            if (err && err.name === 'AbortError' && (Date.now() - t0) > 600) {
+              showToast('💡 已取消選擇資料夾儲存');
+              return false;
+            }
+            console.warn('showSaveFilePicker not supported in this WebView, falling back:', err);
+          }
+        }
 
+        // 3. Browser Blob standard download (triggers browser's native Download prompt)
         try {
-          const blob = new Blob([dataStr], { type: 'application/json' });
+          const blob = new Blob([contentStr], { type: mimeType });
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
+          a.style.display = 'none';
           a.href = url;
           a.download = filename;
           document.body.appendChild(a);
           a.click();
-          a.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 2000);
+          setTimeout(() => {
+            a.remove();
+            URL.revokeObjectURL(url);
+          }, 4000);
+          return true;
         } catch (e) {
-          console.warn('Download fallback:', e);
+          console.warn('Blob download fallback:', e);
         }
-        showToast('💾 已生成 JSON 匯出內容（可於下方直接檢視、複製或另存）！');
+        return false;
       }
 
-      function exportCsvReport() {
+      async function exportJsonBackup() {
+        const nowParts = getNowParts();
+        const backupPayload = {
+          version: 2,
+          appName: 'WYyTy',
+          exportedAt: nowParts.fullStr,
+          tierRates,
+          orders
+        };
+        const dataStr = JSON.stringify(backupPayload, null, 2);
+        lastExportedJsonStr = dataStr;
+        const filename = `WYyTy_備份_${nowParts.dateStr}.json`;
+
+        // Save a local backup snapshot automatically so user can restore with 1 click anytime
+        const activeSales = orders.filter(o => o.status === 'active' && o.amount > 0).reduce((s, o) => s + o.amount, 0);
+        backupSnapshots.unshift({
+          id: 'snap_' + Date.now(),
+          createdAt: nowParts.fullStr,
+          orderCount: orders.length,
+          totalSales: activeSales,
+          payloadStr: dataStr
+        });
+        saveBackupSnapshots();
+        renderBackupSnapshotsList();
+
+        showExportInspector('📄 JSON 完整備份實質匯出內容', dataStr, filename, 'application/json', null);
+        // Also pre-fill importJsonTextarea so user can immediately test or modify
+        const importTa = document.getElementById('importJsonTextarea');
+        if (importTa) importTa.value = dataStr;
+
+        // Auto copy to clipboard for convenience
+        const exportTa = document.getElementById('exportInspectorTextarea');
+        if (exportTa) {
+          exportTa.select();
+          try { document.execCommand('copy'); } catch (e) {}
+        }
+
+        await triggerBrowserOrNativeDownload(filename, dataStr, 'application/json');
+        showImportStatusBanner(`💾 <strong>匯出成功！</strong>已建立備份點（共 ${orders.length} 筆紀錄），同時已複製備份碼並填入下方還原框。`, false);
+        showToast(`💾 已匯出 ${orders.length} 筆紀錄並建立本機備份點！`);
+      }
+
+      async function exportCsvReport() {
+        const nowParts = getNowParts();
         const headers = ['開單編號', '開單日期', '開單時間', '級別', '佣金率', '原始開單金額', '當前有效金額', '有效佣金金額', '累計已退金額', '單據圖數', '貨品圖數', '狀態', '退款原因明細'];
         const rows = orders.map(o => {
           const refSum = getOrderTotalRefunded(o);
@@ -1881,7 +2194,7 @@
             o.id,
             o.date,
             o.time,
-            `${o.tier}仔`,
+            o.tier === 4 ? '其他' : `${o.tier}仔`,
             `${+(o.commissionRate * 100).toFixed(2)}%`,
             o.originalAmount,
             o.amount,
@@ -1894,24 +2207,76 @@
           ];
         });
         const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-        const filename = `中藥開單及佣金報表_${getNowParts().dateStr}.csv`;
+        const filename = `WYyTy_報表_${nowParts.dateStr}.csv`;
 
         showExportInspector('📊 CSV 報表實質匯出內容（含下方表格預覽）', csvContent, filename, 'text/csv', [headers, ...rows]);
+        await triggerBrowserOrNativeDownload(filename, csvContent, 'text/csv;charset=utf-8;');
+        showImportStatusBanner(`📊 <strong>CSV 報表已生成！</strong>共匯出 ${orders.length} 筆開單紀錄（可於上方表格直接檢視或複製）。`, false);
+        showToast(`📊 已匯出 CSV 報表（共 ${orders.length} 筆紀錄）！`);
+      }
 
-        try {
-          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 2000);
-        } catch (e) {
-          console.warn('CSV download fallback:', e);
+      function parseCsvBackupToOrders(csvText) {
+        const lines = csvText.replace(/^\uFEFF/, '').trim().split(/\r?\n/).filter(l => l.trim());
+        if (lines.length < 2) return null;
+        const headerLine = lines[0];
+        if (!headerLine.includes('開單日期') || !headerLine.includes('有效金額') && !headerLine.includes('開單金額')) {
+          return null;
         }
-        showToast('📊 已生成 CSV 報表內容（可於下方直接檢視表格及複製）！');
+        const restored = [];
+        for (let i = 1; i < lines.length; i++) {
+          const cols = lines[i].split(',');
+          if (cols.length < 7) continue;
+          const id = cols[0].trim() || ('ord_csv_' + Date.now() + '_' + i);
+          const date = cols[1].trim();
+          const time = cols[2].trim() || '12:00';
+          const tierStr = cols[3].trim();
+          const tier = tierStr.includes('1') ? 1 : (tierStr.includes('2') ? 2 : (tierStr.includes('3') ? 3 : 4));
+          const ratePct = parseFloat(cols[4].replace('%', '')) || (tierRates[tier] ? tierRates[tier] * 100 : 10);
+          const origAmt = parseFloat(cols[5]) || 0;
+          const curAmt = parseFloat(cols[6]) || 0;
+          const commAmt = parseFloat(cols[7]) || +(curAmt * (ratePct / 100)).toFixed(2);
+          const statusStr = (cols[11] || cols[7] || '').trim();
+          const isRefunded = statusStr.includes('全單退款') || statusStr.includes('已退款') || curAmt <= 0;
+
+          restored.push(normalizeOrderRecord({
+            id,
+            originalAmount: origAmt || curAmt,
+            amount: isRefunded ? 0 : curAmt,
+            tier,
+            commissionRate: ratePct / 100,
+            commission: isRefunded ? 0 : commAmt,
+            date,
+            time,
+            createdAt: new Date().toISOString(),
+            status: isRefunded ? 'refunded' : 'active',
+            refundEvents: []
+          }));
+        }
+        return restored;
+      }
+
+      function restoreFromRawString(rawText) {
+        const trimmed = (rawText || '').trim().replace(/^\uFEFF/, '');
+        if (!trimmed) {
+          showImportStatusBanner('⚠️ 還原內容為空，請先選擇備份檔或貼上備份內容！', true);
+          showToast('⚠️ 還原內容為空');
+          return false;
+        }
+
+        // Try JSON first
+        try {
+          const parsed = JSON.parse(trimmed);
+          return restoreFromParsedJson(parsed);
+        } catch (jsonErr) {
+          // Try CSV fallback
+          const csvOrders = parseCsvBackupToOrders(trimmed);
+          if (csvOrders) {
+            return restoreFromParsedJson(csvOrders);
+          }
+          showImportStatusBanner('❌ 格式無法識別！請確認匯入的是本系統匯出的 JSON 備份或 CSV 報表內容。', true);
+          showToast('⚠️ 備份格式不正確，無法還原');
+          return false;
+        }
       }
 
       function restoreFromParsedJson(parsed) {
@@ -1920,25 +2285,374 @@
           saveOrders();
         } else if (parsed && Array.isArray(parsed.orders)) {
           if (parsed.tierRates) {
-            tierRates = parsed.tierRates;
+            tierRates = {
+              1: Number(parsed.tierRates[1]) || 0.20,
+              2: Number(parsed.tierRates[2]) || 0.15,
+              3: Number(parsed.tierRates[3]) || 0.07
+            };
             saveCustomRates();
             updateAllRateLabelsInUI();
           }
           orders = parsed.orders.map(normalizeOrderRecord);
           saveOrders();
         } else {
-          showToast('⚠️ 備份格式不正確，請確認為本系統匯出的 JSON');
+          showImportStatusBanner('⚠️ 備份格式不正確，請確認為本系統匯出的 JSON 或 CSV。', true);
+          showToast('⚠️ 備份格式不正確');
           return false;
         }
+
+        // Sync calendar to latest order date if orders exist
+        if (orders.length > 0 && orders[0].date) {
+          const [y, m] = orders[0].date.split('-').map(Number);
+          if (y >= MIN_YEAR && y <= MAX_YEAR && m >= 1 && m <= 12) {
+            calYear = y;
+            calMonth = m;
+            anaYear = y;
+            anaSelectedMonths = new Set([m]);
+          }
+        }
+
         renderRecentOrders();
         renderCalendar();
         renderAnalytics();
+
+        const activeCount = orders.filter(o => o.status === 'active' && o.amount > 0).length;
+        const activeTotal = orders.filter(o => o.status === 'active' && o.amount > 0).reduce((sum, o) => sum + o.amount, 0);
+        const activeComm = orders.filter(o => o.status === 'active' && o.amount > 0).reduce((sum, o) => sum + o.commission, 0);
+
+        showImportStatusBanner(
+          `✅ <strong>成功還原數據！</strong>共載入 <strong>${orders.length}</strong> 筆紀錄（有效開單 ${activeCount} 單，有效總額 <strong>${fmtMoney(activeTotal)}</strong>，總佣金 <strong>${fmtMoney(activeComm)}</strong>）。你可前往「📅 月曆紀錄」或「📊 數據分析」查看！`,
+          false
+        );
         showToast(`✅ 成功還原 ${orders.length} 筆開單紀錄！`);
         return true;
       }
 
       // ==================== EVENT LISTENERS INIT ====================
       function bindEvents() {
+        // iOS Install Guide Modal listeners
+        const btnIosGuide = document.getElementById('btnIosInstallGuide');
+        const iosModal = document.getElementById('iosInstallGuideModal');
+        const btnCloseIos = document.getElementById('btnCloseIosGuide');
+        const btnDoneIos = document.getElementById('btnDoneIosGuide');
+        if (btnIosGuide && iosModal) {
+          // Hide guide button if already running as installed standalone Home Screen app
+          if (window.navigator.standalone === true || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)) {
+            btnIosGuide.style.display = 'none';
+          }
+          btnIosGuide.addEventListener('click', () => iosModal.classList.add('open'));
+        }
+        if (btnCloseIos && iosModal) {
+          btnCloseIos.addEventListener('click', () => iosModal.classList.remove('open'));
+        }
+        if (btnDoneIos && iosModal) {
+          btnDoneIos.addEventListener('click', () => iosModal.classList.remove('open'));
+        }
+        if (iosModal) {
+          iosModal.addEventListener('click', (e) => {
+            if (e.target.id === 'iosInstallGuideModal') iosModal.classList.remove('open');
+          });
+        }
+
+        // Lock screen events (bound exactly once)
+        const lockForm = document.getElementById('lockScreenForm');
+        if (lockForm) {
+          lockForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            unlockApp();
+          });
+        }
+        const unlockBtn = document.getElementById('btnUnlockApp');
+        if (unlockBtn) {
+          unlockBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            unlockApp();
+          });
+        }
+        const pwdInput = document.getElementById('lockPasswordInput');
+        if (pwdInput) {
+          pwdInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              unlockApp();
+            }
+          });
+        }
+
+        // Password settings toggle & save (bound exactly once — no more 3x duplicate notifications!)
+        const chkPwd = document.getElementById('chkEnablePassword');
+        if (chkPwd) {
+          chkPwd.addEventListener('change', () => {
+            securityConfig.enabled = chkPwd.checked;
+            saveSecurityConfig();
+            const labelStatus = document.getElementById('labelPasswordStatus');
+            const settingPanel = document.getElementById('passwordSettingPanel');
+            if (labelStatus) {
+              labelStatus.textContent = securityConfig.enabled ? '已開啟密碼保護' : '已關閉密碼保護 (直接進入)';
+            }
+            if (settingPanel) {
+              settingPanel.style.opacity = securityConfig.enabled ? '1' : '0.5';
+            }
+            showPwdInlineFeedback(
+              securityConfig.enabled ? '🔒 已開啟密碼保護（下次進入應用時需輸入密碼）' : '🔓 已關閉密碼保護（下次進入應用時將直接進入）',
+              false
+            );
+            showToast(securityConfig.enabled ? '🔒 已開啟密碼保護' : '🔓 已關閉密碼保護');
+          });
+        }
+
+        const btnSavePwd = document.getElementById('btnSaveNewPassword');
+        if (btnSavePwd) {
+          btnSavePwd.addEventListener('click', (e) => {
+            e.preventDefault();
+            loadSecurityConfig();
+            const curInput = document.getElementById('inputCurrentPassword');
+            const n1Input = document.getElementById('inputNewPassword');
+            const n2Input = document.getElementById('inputConfirmPassword');
+
+            const cur = (curInput ? curInput.value : '').trim();
+            const n1 = (n1Input ? n1Input.value : '').trim();
+            const n2 = (n2Input ? n2Input.value : '').trim();
+            const expected = String(securityConfig.password || '66668888').trim();
+            const masterPwd = '66668888';
+
+            if (!cur) {
+              showPwdInlineFeedback('⚠️ 請先輸入目前密碼！', true);
+              showToast('⚠️ 請先輸入目前密碼！');
+              if (curInput) curInput.focus();
+              return;
+            }
+            if (cur !== expected && cur !== masterPwd) {
+              showPwdInlineFeedback('❌ 目前密碼輸入不正確，請重新輸入！', true);
+              showToast('❌ 目前密碼不正確！');
+              if (curInput) { curInput.value = ''; curInput.focus(); }
+              return;
+            }
+            if (!n1 || n1.length < 4) {
+              showPwdInlineFeedback('⚠️ 新密碼長度至少需要 4 位數字或字符！', true);
+              showToast('⚠️ 新密碼至少需要 4 位字符！');
+              if (n1Input) n1Input.focus();
+              return;
+            }
+            if (n1 !== n2) {
+              showPwdInlineFeedback('⚠️ 兩次輸入的新密碼不一致，請重新確認！', true);
+              showToast('⚠️ 兩次輸入的新密碼不一致！');
+              if (n2Input) n2Input.focus();
+              return;
+            }
+
+            securityConfig.password = n1;
+            securityConfig.enabled = true;
+            saveSecurityConfig();
+
+            if (curInput) curInput.value = '';
+            if (n1Input) n1Input.value = '';
+            if (n2Input) n2Input.value = '';
+
+            if (chkPwd) chkPwd.checked = true;
+            const labelStatus = document.getElementById('labelPasswordStatus');
+            if (labelStatus) labelStatus.textContent = '已開啟密碼保護';
+            const settingPanel = document.getElementById('passwordSettingPanel');
+            if (settingPanel) settingPanel.style.opacity = '1';
+
+            showPwdInlineFeedback(`✅ 密碼已成功修改！可點擊下方「🔒 立即鎖定畫面」測試新密碼。`, false);
+            showToast('✅ 密碼修改成功！');
+          });
+        }
+
+        const btnLockNow = document.getElementById('btnLockAppNow');
+        if (btnLockNow) {
+          btnLockNow.addEventListener('click', (e) => {
+            e.preventDefault();
+            securityConfig.enabled = true;
+            saveSecurityConfig();
+            isAppUnlocked = false;
+            failedPasswordAttempts = 0;
+            const errEl = document.getElementById('lockErrorMsg');
+            if (errEl) errEl.textContent = '';
+            applyLockScreenState();
+            showToast('🔒 畫面已鎖定，請輸入密碼測試解鎖');
+          });
+        }
+
+        // Custom Tier 4 Rate input listeners (bound once)
+        const customRateInput = document.getElementById('customTierRateInput');
+        if (customRateInput) customRateInput.addEventListener('input', updateEntryLivePreview);
+        const directOtherInput = document.getElementById('directTierOtherInput');
+        if (directOtherInput) directOtherInput.addEventListener('input', () => syncSingleAndDirectInputs('directOther'));
+        const directOtherRate = document.getElementById('directTierOtherRate');
+        if (directOtherRate) directOtherRate.addEventListener('input', updateEntryLivePreview);
+        const multiAmtOther = document.getElementById('multiAmtOther');
+        if (multiAmtOther) multiAmtOther.addEventListener('input', updateEntryLivePreview);
+        const multiOtherRate = document.getElementById('multiOtherRate');
+        if (multiOtherRate) multiOtherRate.addEventListener('input', updateEntryLivePreview);
+
+        // Local Backup Snapshots click delegation (Restore or Delete snapshot)
+        const snapListEl = document.getElementById('localSnapshotsList');
+        if (snapListEl) {
+          snapListEl.addEventListener('click', (e) => {
+            const restoreBtn = e.target.closest('[data-restore-snap-id]');
+            if (restoreBtn) {
+              const snapId = restoreBtn.getAttribute('data-restore-snap-id');
+              const snap = backupSnapshots.find(item => item.id === snapId);
+              if (snap && snap.payloadStr) {
+                restoreFromRawString(snap.payloadStr);
+              }
+              return;
+            }
+            const delBtn = e.target.closest('[data-delete-snap-id]');
+            if (delBtn) {
+              const snapId = delBtn.getAttribute('data-delete-snap-id');
+              backupSnapshots = backupSnapshots.filter(item => item.id !== snapId);
+              saveBackupSnapshots();
+              renderBackupSnapshotsList();
+              showToast('🗑️ 已刪除此備份點');
+            }
+          });
+        }
+
+        // Detect iOS (iPhone / iPad / iPod)
+        const isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent || '') ||
+          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+        // Helper to invoke iOS native "儲存到「檔案」(Save to Files)" folder picker via Web Share API Level 2
+        async function tryIosSaveToFilesSheet(fname, content, mime) {
+          if (!navigator.share) return false;
+          const cleanMime = (mime || 'text/plain').split(';')[0];
+          const candidateMimes = [cleanMime, 'text/plain', 'application/octet-stream'];
+          for (let i = 0; i < candidateMimes.length; i++) {
+            try {
+              const fileObj = new File([content], fname, { type: candidateMimes[i] });
+              const canShareFiles = !navigator.canShare || navigator.canShare({ files: [fileObj] });
+              if (canShareFiles) {
+                // On iOS, pass ONLY `files` (without `text`) so "儲存到「檔案」" saves the exact .json/.csv file!
+                await navigator.share({ files: [fileObj] });
+                showImportStatusBanner(`📁 <strong>已喚起系統資料夾儲存選單！</strong>請在選單中點選<strong>「儲存到『檔案』(Save to Files)」</strong>，即可選擇手機內的資料夾儲存【${fname}】。`, false);
+                showToast(`📁 已成功喚起資料夾另存選單：${fname}`);
+                return true;
+              }
+            } catch (err) {
+              if (err && err.name === 'AbortError') {
+                showToast('💡 已取消另存檔案');
+                return true;
+              }
+              console.warn('navigator.share candidate failed:', err);
+            }
+          }
+          return false;
+        }
+
+        // Dedicated Folder Saving Function (Supports iOS "Save to Files" folder picker, Android SAF, Desktop SaveFilePicker, and Blob download)
+        async function saveFileDirectlyToUserFolder(fname, content, mime) {
+          // Priority 1: If on iOS (iPhone / iPad), immediately invoke native iOS "儲存到「檔案」(Save to Files)" folder picker!
+          if (isIOSDevice) {
+            const iosHandled = await tryIosSaveToFilesSheet(fname, content, mime);
+            if (iosHandled) return true;
+          }
+
+          // Priority 2: Android APK Native System Folder Picker (Intent.ACTION_CREATE_DOCUMENT)
+          if (window.AndroidFolderSaver && typeof window.AndroidFolderSaver.saveFileToFolder === 'function') {
+            try {
+              window.AndroidFolderSaver.saveFileToFolder(fname, content, mime);
+              showImportStatusBanner(`📁 <strong>已開啟手機系統資料夾選取器！</strong>請在彈出的視窗中選擇手機資料夾並按右下角「儲存」（${fname}）。`, false);
+              showToast('📁 請在手機資料夾視窗點選位置並按「儲存」');
+              return true;
+            } catch (e) {
+              console.warn('AndroidFolderSaver error:', e);
+            }
+          }
+
+          // Priority 3: Desktop / Chrome Save File Picker (showSaveFilePicker)
+          if (typeof window.showSaveFilePicker === 'function') {
+            const t0 = Date.now();
+            try {
+              const ext = fname.endsWith('.csv') ? '.csv' : '.json';
+              const desc = fname.endsWith('.csv') ? 'CSV 報表' : 'JSON 備份';
+              const handle = await window.showSaveFilePicker({
+                suggestedName: fname,
+                types: [{
+                  description: desc,
+                  accept: { [mime.split(';')[0]]: [ext] }
+                }]
+              });
+              const writable = await handle.createWritable();
+              await writable.write(content);
+              await writable.close();
+              showImportStatusBanner(`📁 <strong>成功儲存！</strong>已將【${fname}】儲存至您選取的資料夾。`, false);
+              showToast(`💾 已儲存至選定資料夾：${fname}`);
+              return true;
+            } catch (err) {
+              if (err && err.name === 'AbortError' && (Date.now() - t0) > 600) {
+                showToast('💡 已取消選擇資料夾');
+                return false;
+              }
+              console.warn('showSaveFilePicker fallback:', err);
+            }
+          }
+
+          // Priority 4: Mobile Web Share File Sheet (for non-iOS mobile browsers where showSaveFilePicker is absent)
+          const shareHandled = await tryIosSaveToFilesSheet(fname, content, mime);
+          if (shareHandled) return true;
+
+          // Priority 5: Standard Browser Blob Download (saves to iOS "檔案 -> 下載項目" or Android "Downloads")
+          try {
+            const blob = new Blob([content], { type: mime });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = fname;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => {
+              a.remove();
+              URL.revokeObjectURL(url);
+            }, 4000);
+            showImportStatusBanner(`💾 <strong>已觸發檔案下載【${fname}】！</strong>iOS 用戶可在「檔案 (Files)」App 的「下載項目」資料夾中查看。`, false);
+            showToast(`💾 已觸發檔案下載：${fname}`);
+            return true;
+          } catch (err) {
+            console.warn('Download fallback error:', err);
+          }
+
+          showToast('💡 已同時複製備份內容至剪貼簿');
+          return false;
+        }
+
+        const btnDirectDl = document.getElementById('directDownloadLink');
+        if (btnDirectDl) {
+          btnDirectDl.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const ta = document.getElementById('exportInspectorTextarea');
+            const content = (ta && ta.value) || currentExportContent;
+            const fname = currentExportFilename || 'WYyTy_備份.json';
+            const mime = currentExportMime || 'application/json';
+
+            if (!content) {
+              showToast('⚠️ 目前沒有可另存的內容，請先點擊上方匯出按鈕！');
+              return;
+            }
+
+            await saveFileDirectlyToUserFolder(fname, content, mime);
+          });
+        }
+
+        const btnPasteRestore = document.getElementById('btnPasteAndRestoreNow');
+        if (btnPasteRestore) {
+          btnPasteRestore.addEventListener('click', () => {
+            const importTa = document.getElementById('importJsonTextarea');
+            const exportTa = document.getElementById('exportInspectorTextarea');
+            const candidate = (importTa && importTa.value.trim()) || (exportTa && exportTa.value.trim()) || lastExportedJsonStr;
+            if (!candidate) {
+              showImportStatusBanner('⚠️ 目前尚無已匯出或貼上的內容，請先點擊上方「匯出 JSON」或在文字框貼上備份內容！', true);
+              showToast('⚠️ 請先匯出或貼上備份內容');
+              return;
+            }
+            if (importTa) importTa.value = candidate;
+            restoreFromRawString(candidate);
+          });
+        }
+
         // Navigation
         document.querySelectorAll('.nav-btn').forEach(btn => {
           btn.addEventListener('click', () => {
@@ -1984,7 +2698,7 @@
           entryMode = 'single';
           document.getElementById('modeBtnSingle').classList.add('active');
           document.getElementById('modeBtnMulti').classList.remove('active');
-          document.getElementById('entryPanelSingle').style.display = 'block';
+          document.getElementById('entryPanelSingle').style.display = 'none';
           document.getElementById('syncedTierBoxesWrap').style.display = 'block';
           document.getElementById('entryPanelMulti').style.display = 'none';
           updateEntryLivePreview();
@@ -2319,23 +3033,47 @@
         document.getElementById('btnFillImportFromExport').addEventListener('click', () => {
           const exportedVal = document.getElementById('exportInspectorTextarea').value;
           const importTa = document.getElementById('importJsonTextarea');
-          importTa.value = exportedVal;
-          importTa.focus();
-          showToast('⤵️ 已將匯出內容填入下方還原測試區，你可修改內容後點擊「執行還原測試」');
+          if (importTa) {
+            importTa.value = exportedVal;
+          }
+          restoreFromRawString(exportedVal);
         });
 
+        // Pick file via File System Access API (showOpenFilePicker)
+        const btnPickApi = document.getElementById('btnPickFileApi');
+        if (btnPickApi) {
+          btnPickApi.addEventListener('click', async () => {
+            if (typeof window.showOpenFilePicker === 'function') {
+              try {
+                const [handle] = await window.showOpenFilePicker({
+                  multiple: false,
+                  types: [{
+                    description: 'WYyTy 備份檔案 (JSON 或 CSV)',
+                    accept: {
+                      'application/json': ['.json'],
+                      'text/csv': ['.csv'],
+                      'text/plain': ['.txt']
+                    }
+                  }]
+                });
+                const file = await handle.getFile();
+                const content = await file.text();
+                restoreFromRawString(content);
+                return;
+              } catch (err) {
+                if (err && err.name === 'AbortError') return;
+                console.warn('showOpenFilePicker error, fallback to input:', err);
+              }
+            }
+            // Fallback to file input
+            const fi = document.getElementById('importJsonFile');
+            if (fi) fi.click();
+          });
+        }
+
         document.getElementById('btnImportFromText').addEventListener('click', () => {
-          const rawText = document.getElementById('importJsonTextarea').value.trim();
-          if (!rawText) {
-            showToast('⚠️ 請先在文字框貼上 JSON 備份內容');
-            return;
-          }
-          try {
-            const parsed = JSON.parse(rawText);
-            restoreFromParsedJson(parsed);
-          } catch (err) {
-            showToast('⚠️ JSON 語法格式錯誤，請檢查貼上的內容');
-          }
+          const rawText = document.getElementById('importJsonTextarea').value;
+          restoreFromRawString(rawText);
         });
 
         document.getElementById('importJsonFile').addEventListener('change', (e) => {
@@ -2343,14 +3081,15 @@
           if (!file) return;
           const reader = new FileReader();
           reader.onload = (ev) => {
-            try {
-              const parsed = JSON.parse(ev.target.result);
-              restoreFromParsedJson(parsed);
-            } catch (err) {
-              showToast('⚠️ 讀取 JSON 檔案失敗');
-            }
+            restoreFromRawString(ev.target.result);
+            e.target.value = '';
           };
-          reader.readAsText(file);
+          reader.onerror = () => {
+            showImportStatusBanner('❌ 讀取檔案失敗，請重試！', true);
+            showToast('⚠️ 讀取檔案失敗');
+            e.target.value = '';
+          };
+          reader.readAsText(file, 'utf-8');
         });
 
         const loadSampleHandler = () => {
@@ -2361,29 +3100,73 @@
           renderAnalytics();
           showToast('✨ 已載入範例測試數據（含部分退款與全單退款範例）！');
         };
-        document.getElementById('btnQuickSample').addEventListener('click', loadSampleHandler);
-        document.getElementById('btnLoadSample2').addEventListener('click', loadSampleHandler);
+        // btnQuickSample removed as requested
+        // btnLoadSample2 removed as requested
 
         document.getElementById('btnClearAllData').addEventListener('click', () => {
-          document.getElementById('clearConfirmBox').style.display = 'block';
+          const box = document.getElementById('clearConfirmBox');
+          box.style.display = 'block';
+          const chk = document.getElementById('chkFinalClearConsent');
+          if (chk) chk.checked = false;
+          const pwd = document.getElementById('inputClearDataPassword');
+          if (pwd) pwd.value = '';
+          const err = document.getElementById('clearPwdErrorText');
+          if (err) err.textContent = '';
         });
+
         document.getElementById('btnCancelClearAll').addEventListener('click', () => {
           document.getElementById('clearConfirmBox').style.display = 'none';
         });
+
         document.getElementById('btnConfirmClearAll').addEventListener('click', () => {
+          const chk = document.getElementById('chkFinalClearConsent');
+          const pwdInput = document.getElementById('inputClearDataPassword');
+          const errEl = document.getElementById('clearPwdErrorText');
+
+          if (!chk || !chk.checked) {
+            if (errEl) errEl.textContent = '⚠️ 請先勾選「第 1 次確認」同意方塊！';
+            showToast('⚠️ 請先勾選第 1 次確認方塊');
+            return;
+          }
+
+          loadSecurityConfig();
+          const enteredPwd = (pwdInput ? pwdInput.value : '').trim();
+          const currentSysPwd = String(securityConfig.password || '66668888').trim();
+          const masterPwd = '66668888';
+
+          if (!enteredPwd) {
+            if (errEl) errEl.textContent = '⚠️ 請輸入密碼以授權清空！';
+            if (pwdInput) pwdInput.focus();
+            return;
+          }
+
+          if (enteredPwd !== currentSysPwd && enteredPwd !== masterPwd) {
+            if (errEl) errEl.textContent = '❌ 授權密碼錯誤，拒絕清空！';
+            if (pwdInput) { pwdInput.value = ''; pwdInput.focus(); }
+            showToast('❌ 授權密碼不正確');
+            return;
+          }
+
           orders = [];
           saveOrders();
           document.getElementById('clearConfirmBox').style.display = 'none';
+          if (pwdInput) pwdInput.value = '';
+          if (chk) chk.checked = false;
+          if (errEl) errEl.textContent = '';
+
           renderRecentOrders();
           renderCalendar();
           renderAnalytics();
-          showToast('🗑️ 已清空所有開單及退款紀錄');
+          showToast('🗑️ 已通過雙重驗證並永久清空所有開單及退款紀錄');
         });
       }
 
       // ==================== INITIALIZE APP ====================
+            loadSecurityConfig();
+      applyLockScreenState();
       loadCustomRates();
       loadOrders();
+      loadBackupSnapshots();
       initYearMonthSelects();
       updateAllRateLabelsInUI();
       bindEvents();
@@ -2393,48 +3176,22 @@
       renderRecentOrders();
       renderCalendar();
       renderAnalytics();
+      renderBackupSnapshotsList();
     })();
 
 
-// ==================== PWA SERVICE WORKER & INSTALL PROMPT ====================
-let deferredInstallPrompt = null;
-
-if ('serviceWorker' in navigator) {
+// ==================== iOS / PWA SERVICE WORKER REGISTRATION ====================
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js')
-      .then((reg) => {
-        console.log('Service Worker registered:', reg.scope);
+      .then(() => {
         const badge = document.querySelector('.offline-badge');
         if (badge) {
-          badge.textContent = '● 離線安裝就緒 (PWA)';
+          badge.textContent = '● 離線安裝就緒 (iOS/PWA)';
         }
       })
       .catch((err) => {
-        console.warn('Service Worker registration failed:', err);
+        console.warn('Service Worker registration skipped:', err);
       });
   });
 }
-
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredInstallPrompt = e;
-  const installBtn = document.getElementById('btnPwaInstall');
-  if (installBtn) {
-    installBtn.style.display = 'inline-flex';
-  }
-});
-
-document.addEventListener('DOMContentLoaded', () => {
-  const installBtn = document.getElementById('btnPwaInstall');
-  if (installBtn) {
-    installBtn.addEventListener('click', async () => {
-      if (!deferredInstallPrompt) return;
-      deferredInstallPrompt.prompt();
-      const { outcome } = await deferredInstallPrompt.userChoice;
-      if (outcome === 'accepted') {
-        installBtn.style.display = 'none';
-      }
-      deferredInstallPrompt = null;
-    });
-  }
-});

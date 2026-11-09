@@ -1,15 +1,20 @@
 {
-  "name": "個人中藥開單紀錄、佣金及數據分析系統",
-  "short_name": "中藥開單紀錄",
-  "description": "個人中藥開單金額紀錄、2023-2060月曆管理、單據貨品拍照及佣金數據分析離線應用",
+  "name": "WYyTy",
+  "short_name": "WYyTy",
+  "description": "WYyTy 個人中藥開單紀錄及佣金分析 (iOS & Android 離線版)",
   "lang": "zh-HK",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#f4f6f3",
+  "background_color": "#17382e",
   "theme_color": "#1e463a",
   "icons": [
+    {
+      "src": "./apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
     {
       "src": "./icon-192.png",
       "sizes": "192x192",
