@@ -487,6 +487,57 @@
         `;
       }
 
+      // ==================== MULTI-BOOK (多帳簿) & INDEPENDENT COMMISSION RATES ====================
+      const BOOKS_STORAGE_BASE_KEY = 'wyyty_books_v1';
+      let books = [
+        {
+          id: 'book_1',
+          name: '帳簿一',
+          tierRates: { 1: 0.20, 2: 0.15, 3: 0.07 }
+        }
+      ];
+      let activeBookId = 'book_1';
+      let pendingDeleteBookId = null;
+
+      function escapeHtml(str) {
+        return String(str || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function getBooksStorageKeyForUser() {
+        if (currentFirebaseUser && currentFirebaseUser.uid) {
+          return BOOKS_STORAGE_BASE_KEY + '_' + currentFirebaseUser.uid;
+        }
+        return BOOKS_STORAGE_BASE_KEY + '_local';
+      }
+
+      function getActiveBook() {
+        let found = books.find(b => b.id === activeBookId);
+        if (!found) {
+          if (books.length === 0) {
+            books.push({
+              id: 'book_1',
+              name: '帳簿一',
+              tierRates: { 1: 0.20, 2: 0.15, 3: 0.07 }
+            });
+          }
+          found = books[0];
+          activeBookId = found.id;
+        }
+        if (!found.tierRates) {
+          found.tierRates = { 1: 0.20, 2: 0.15, 3: 0.07 };
+        }
+        return found;
+      }
+
+      function getActiveBookOrders() {
+        return orders.filter(o => (o.bookId || 'book_1') === activeBookId);
+      }
+
       function loadCustomRates() {
         try {
           const raw = localStorage.getItem(RATES_STORAGE_KEY);
@@ -505,12 +556,163 @@
         }
       }
 
+      function loadBooksConfig() {
+        loadCustomRates();
+        const key = getBooksStorageKeyForUser();
+        try {
+          const raw = localStorage.getItem(key) || localStorage.getItem(BOOKS_STORAGE_BASE_KEY + '_local');
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && Array.isArray(parsed.books) && parsed.books.length > 0) {
+              books = parsed.books.map(b => ({
+                id: String(b.id || 'book_1'),
+                name: String(b.name || '帳簿一'),
+                tierRates: {
+                  1: (b.tierRates && typeof b.tierRates[1] === 'number') ? b.tierRates[1] : 0.20,
+                  2: (b.tierRates && typeof b.tierRates[2] === 'number') ? b.tierRates[2] : 0.15,
+                  3: (b.tierRates && typeof b.tierRates[3] === 'number') ? b.tierRates[3] : 0.07
+                }
+              }));
+              if (parsed.activeBookId && books.some(b => b.id === parsed.activeBookId)) {
+                activeBookId = parsed.activeBookId;
+              } else {
+                activeBookId = books[0].id;
+              }
+            }
+          } else {
+            books = [
+              {
+                id: 'book_1',
+                name: '帳簿一',
+                tierRates: { 1: tierRates[1] || 0.20, 2: tierRates[2] || 0.15, 3: tierRates[3] || 0.07 }
+              }
+            ];
+            activeBookId = 'book_1';
+          }
+        } catch (e) {
+          console.warn('Books config read error:', e);
+        }
+
+        const activeBk = getActiveBook();
+        tierRates = {
+          1: activeBk.tierRates[1],
+          2: activeBk.tierRates[2],
+          3: activeBk.tierRates[3]
+        };
+      }
+
+      function saveBooksConfig() {
+        const activeBk = getActiveBook();
+        activeBk.tierRates = {
+          1: tierRates[1],
+          2: tierRates[2],
+          3: tierRates[3]
+        };
+        const key = getBooksStorageKeyForUser();
+        try {
+          localStorage.setItem(key, JSON.stringify({ books, activeBookId }));
+        } catch (e) {
+          console.warn('Books config save error:', e);
+        }
+      }
+
       function saveCustomRates() {
         try {
           localStorage.setItem(RATES_STORAGE_KEY, JSON.stringify(tierRates));
         } catch (e) {
           console.warn('Rates save fallback:', e);
         }
+        saveBooksConfig();
+        if (currentFirebaseUser && currentFirebaseUser.uid) {
+          syncOrdersToCloud(currentFirebaseUser.uid);
+        }
+      }
+
+      function switchActiveBook(bookId) {
+        if (!books.some(b => b.id === bookId)) return;
+        activeBookId = bookId;
+        const bk = getActiveBook();
+        tierRates = {
+          1: bk.tierRates[1],
+          2: bk.tierRates[2],
+          3: bk.tierRates[3]
+        };
+        saveBooksConfig();
+        updateAllRateLabelsInUI();
+        renderTopBookBar();
+        renderSettingsBookManagement();
+        updateEntryLivePreview();
+        renderRecentOrders();
+        renderCalendar();
+        renderAnalytics();
+        showToast(`📚 已切換至「${bk.name}」（默認佣金：${+(tierRates[1]*100).toFixed(1)}% / ${+(tierRates[2]*100).toFixed(1)}% / ${+(tierRates[3]*100).toFixed(1)}%）`);
+      }
+
+      function renderTopBookBar() {
+        const container = document.getElementById('topBookTabsContainer');
+        if (!container) return;
+        const activeBk = getActiveBook();
+
+        const tabsHtml = books.map(b => {
+          const isAct = b.id === activeBookId;
+          const cnt = orders.filter(o => (o.bookId || 'book_1') === b.id && o.status === 'active' && o.amount > 0).length;
+          return `
+            <button type="button" class="book-tab-btn ${isAct ? 'active' : ''}" data-switch-book-id="${escapeHtml(b.id)}">
+              <span>📚 ${escapeHtml(b.name)}</span>
+              <span style="font-size:0.7rem; opacity:0.85;">(${cnt})</span>
+            </button>
+          `;
+        }).join('');
+
+        container.innerHTML = `
+          ${tabsHtml}
+          <button type="button" class="book-add-btn" id="btnToggleNewBookBar">➕ 新增帳簿</button>
+        `;
+
+        const entryBadge = document.getElementById('entryActiveBookBadge');
+        if (entryBadge) entryBadge.textContent = `📚 ${activeBk.name}`;
+        const settingsBadge = document.getElementById('settingsActiveBookLabel');
+        if (settingsBadge) settingsBadge.textContent = `目前使用：${activeBk.name}`;
+        const commBadge = document.getElementById('commCardBookBadge');
+        if (commBadge) commBadge.textContent = `📚 ${activeBk.name}`;
+      }
+
+      function renderSettingsBookManagement() {
+        const listEl = document.getElementById('settingsBooksListContainer');
+        if (!listEl) return;
+
+        listEl.innerHTML = books.map((b) => {
+          const isAct = b.id === activeBookId;
+          const bOrders = orders.filter(o => (o.bookId || 'book_1') === b.id);
+          const actCount = bOrders.filter(o => o.status === 'active' && o.amount > 0).length;
+          const actSales = bOrders.filter(o => o.status === 'active' && o.amount > 0).reduce((s, o) => s + o.amount, 0);
+          const r1 = +((b.tierRates && b.tierRates[1] !== undefined ? b.tierRates[1] : 0.20) * 100).toFixed(1);
+          const r2 = +((b.tierRates && b.tierRates[2] !== undefined ? b.tierRates[2] : 0.15) * 100).toFixed(1);
+          const r3 = +((b.tierRates && b.tierRates[3] !== undefined ? b.tierRates[3] : 0.07) * 100).toFixed(1);
+
+          return `
+            <div style="border:1.5px solid ${isAct ? 'var(--primary)' : 'var(--border)'}; background:${isAct ? '#f4fbf7' : '#ffffff'}; border-radius:10px; padding:12px; margin-bottom:10px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+                <div>
+                  <strong style="font-size:0.95rem; color:var(--primary);">📚 ${escapeHtml(b.name)}</strong>
+                  ${isAct ? '<span class="tier-badge t1" style="margin-left:6px; font-size:0.72rem;">目前使用中</span>' : ''}
+                  <div style="font-size:0.76rem; color:var(--text-muted); margin-top:2px;">
+                    有效單數：${actCount} 單 ｜ 有效總額：${fmtMoney(actSales)} ｜ 默認佣金率：${r1}% / ${r2}% / ${r3}%
+                  </div>
+                </div>
+                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                  ${!isAct ? `<button type="button" class="btn btn-secondary" data-switch-book-id="${escapeHtml(b.id)}" style="padding:5px 10px; font-size:0.78rem;">切換至此帳簿</button>` : ''}
+                  <button type="button" class="btn btn-outline-danger" data-req-del-book="${escapeHtml(b.id)}" style="padding:5px 10px; font-size:0.78rem;">🗑️ 刪除帳簿</button>
+                </div>
+              </div>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding-top:8px; border-top:1px dashed var(--border);">
+                <label style="font-size:0.78rem; font-weight:700; color:var(--text-muted); white-space:nowrap;">修改帳簿名稱：</label>
+                <input type="text" class="input-text" data-rename-input-id="${escapeHtml(b.id)}" value="${escapeHtml(b.name)}" maxlength="24" style="flex:1; min-width:140px; padding:6px 10px; font-size:0.84rem;" />
+                <button type="button" class="btn btn-primary" data-save-rename-id="${escapeHtml(b.id)}" style="padding:6px 12px; font-size:0.78rem;">💾 儲存名稱</button>
+              </div>
+            </div>
+          `;
+        }).join('');
       }
 
       function updateAllRateLabelsInUI() {
@@ -573,19 +775,23 @@
 
         if (recalcExisting) {
           orders.forEach(o => {
-            const newRate = tierRates[o.tier] !== undefined ? tierRates[o.tier] : o.commissionRate;
-            o.commissionRate = newRate;
-            o.commission = +(o.amount * newRate).toFixed(2);
+            if ((o.bookId || 'book_1') === activeBookId) {
+              const newRate = tierRates[o.tier] !== undefined ? tierRates[o.tier] : o.commissionRate;
+              o.commissionRate = newRate;
+              o.commission = +(o.amount * newRate).toFixed(2);
+            }
           });
           saveOrders();
         }
 
+        const activeBk = getActiveBook();
         updateAllRateLabelsInUI();
+        renderSettingsBookManagement();
         updateEntryLivePreview();
         renderRecentOrders();
         renderCalendar();
         renderAnalytics();
-        showToast(`✅ 已更新默認佣金率為：1仔 ${fmtPct(n1)} / 2仔 ${fmtPct(n2)} / 3仔 ${fmtPct(n3)}${recalcExisting ? '（已同步重算現有紀錄）' : ''}`);
+        showToast(`✅ 已保存「${activeBk.name}」默認佣金率：1仔 ${fmtPct(n1)} / 2仔 ${fmtPct(n2)} / 3仔 ${fmtPct(n3)}${recalcExisting ? '（已重算此帳簿紀錄）' : ''}`);
       }
 
       
@@ -792,7 +998,11 @@
             if (user) {
               loadUserOrdersFromCloud(user.uid);
             } else {
+              loadBooksConfig();
               loadOrders();
+              updateAllRateLabelsInUI();
+              renderTopBookBar();
+              renderSettingsBookManagement();
               renderRecentOrders();
               renderCalendar();
               renderAnalytics();
@@ -880,6 +1090,8 @@
             updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
             username: (currentFirebaseUser && currentFirebaseUser.displayName) || '',
             email: (currentFirebaseUser && currentFirebaseUser.email) || '',
+            books: books,
+            activeBookId: activeBookId,
             tierRates: tierRates,
             orderCount: orders.length,
             orders: orders
@@ -919,17 +1131,50 @@
             if (data && data.username && currentFirebaseUser && currentFirebaseUser.email) {
               saveLocalUsernameMapping(data.username, currentFirebaseUser.email);
             }
+            if (data && Array.isArray(data.books) && data.books.length > 0) {
+              books = data.books.map(b => ({
+                id: String(b.id || 'book_1'),
+                name: String(b.name || '帳簿一'),
+                tierRates: {
+                  1: (b.tierRates && typeof b.tierRates[1] === 'number') ? b.tierRates[1] : 0.20,
+                  2: (b.tierRates && typeof b.tierRates[2] === 'number') ? b.tierRates[2] : 0.15,
+                  3: (b.tierRates && typeof b.tierRates[3] === 'number') ? b.tierRates[3] : 0.07
+                }
+              }));
+              if (data.activeBookId && books.some(b => b.id === data.activeBookId)) {
+                activeBookId = data.activeBookId;
+              } else {
+                activeBookId = books[0].id;
+              }
+            }
             if (data && Array.isArray(data.orders)) {
               orders = data.orders.map(normalizeOrderRecord);
-              if (data.tierRates) {
-                tierRates = {
+              // Ensure any bookId referenced in orders exists in books
+              orders.forEach(o => {
+                const bid = o.bookId || 'book_1';
+                if (!books.some(b => b.id === bid)) {
+                  books.push({
+                    id: bid,
+                    name: bid === 'book_1' ? '帳簿一' : `帳簿 (${bid})`,
+                    tierRates: { 1: 0.20, 2: 0.15, 3: 0.07 }
+                  });
+                }
+              });
+              const activeBk = getActiveBook();
+              if (!data.books && data.tierRates) {
+                activeBk.tierRates = {
                   1: Number(data.tierRates[1]) || 0.20,
                   2: Number(data.tierRates[2]) || 0.15,
                   3: Number(data.tierRates[3]) || 0.07
                 };
-                saveCustomRates();
-                updateAllRateLabelsInUI();
               }
+              tierRates = {
+                1: activeBk.tierRates[1],
+                2: activeBk.tierRates[2],
+                3: activeBk.tierRates[3]
+              };
+              saveBooksConfig();
+              updateAllRateLabelsInUI();
               saveOrders();
             }
           } else {
@@ -945,6 +1190,8 @@
             headerSyncPill.className = 'cloud-sync-pill synced';
             headerSyncPill.textContent = '☁️ 已同步';
           }
+          renderTopBookBar();
+          renderSettingsBookManagement();
           renderRecentOrders();
           renderCalendar();
           renderAnalytics();
@@ -953,6 +1200,12 @@
 
       // ==================== STORAGE & DATA MODEL HELPERS ====================
       function normalizeOrderRecord(o) {
+        if (!o.bookId) {
+          o.bookId = 'book_1';
+        }
+        if (typeof o.note !== 'string') {
+          o.note = '';
+        }
         if (typeof o.originalAmount !== 'number') {
           o.originalAmount = o.amount;
         }
@@ -2129,6 +2382,8 @@
           renderCalendar();
         } else if (viewName === 'analytics') {
           renderAnalytics();
+        } else if (viewName === 'backup') {
+          renderSettingsBookManagement();
         }
       }
 
@@ -2278,6 +2533,8 @@
         const dateInputVal = document.getElementById('entryDateInput').value.trim();
         const hourInputVal = document.getElementById('entryHourInput').value.trim();
         const minInputVal = document.getElementById('entryMinuteInput').value.trim();
+        const noteInputEl = document.getElementById('entryNoteInput');
+        const noteVal = noteInputEl ? noteInputEl.value.trim() : '';
 
         const finalDate = dateInputVal || nowParts.dateStr;
 
@@ -2296,6 +2553,8 @@
         pending.forEach((item, idx) => {
           const newOrder = {
             id: 'ord_' + Date.now() + '_' + idx + '_' + Math.random().toString(36).slice(2, 6),
+            bookId: activeBookId,
+            note: noteVal,
             originalAmount: +item.amount.toFixed(2),
             amount: +item.amount.toFixed(2),
             tier: item.tier,
@@ -2329,10 +2588,13 @@
         document.getElementById('multiAmt1').value = '';
         document.getElementById('multiAmt2').value = '';
         document.getElementById('multiAmt3').value = '';
+        if (noteInputEl) noteInputEl.value = '';
         pendingReceiptPhotos = [];
         pendingProductPhotos = [];
         renderEntryPhotoThumbs();
         updateEntryLivePreview();
+        renderTopBookBar();
+        renderSettingsBookManagement();
         renderRecentOrders();
 
         showToast(`✅ 已成功記錄 ${pending.length} 筆開單（${finalDate} ${finalTime}）！`);
@@ -2340,17 +2602,19 @@
 
       function renderRecentOrders() {
         const container = document.getElementById('recentOrdersContainer');
-        const activeList = orders.filter(o => o.status === 'active' && o.amount > 0);
-        document.getElementById('recentCountLabel').textContent = `共 ${activeList.length} 筆有效紀錄`;
+        const bookOrders = getActiveBookOrders();
+        const activeBk = getActiveBook();
+        const activeList = bookOrders.filter(o => o.status === 'active' && o.amount > 0);
+        document.getElementById('recentCountLabel').textContent = `【${activeBk.name}】共 ${activeList.length} 筆有效紀錄`;
 
-        const sorted = [...orders].sort((a, b) => {
+        const sorted = [...bookOrders].sort((a, b) => {
           const dtA = `${a.date} ${a.time}`;
           const dtB = `${b.date} ${b.time}`;
           return dtB.localeCompare(dtA);
         }).slice(0, 12);
 
         if (sorted.length === 0) {
-          container.innerHTML = `<div style="text-align:center; padding:24px; color:var(--text-muted);">暫無開單紀錄，請在上方輸入開單金額並按「確認輸入」。</div>`;
+          container.innerHTML = `<div style="text-align:center; padding:24px; color:var(--text-muted);">「${escapeHtml(activeBk.name)}」暫無開單紀錄，請在上方輸入開單金額並按「確認輸入」。</div>`;
           return;
         }
 
@@ -2363,12 +2627,13 @@
 
           return `
             <div class="order-item-card" data-open-date="${o.date}" data-open-id="${o.id}" style="${isFullRefunded ? 'opacity:0.65; background:#fafafa;' : ''}">
-              <div class="order-item-left">
+              <div class="order-item-left" style="flex:1; min-width:180px;">
                 <span class="order-time-badge">${o.date} ${o.time}</span>
                 <span class="tier-badge ${badgeClass}">${getTierLabel(o.tier, o.commissionRate)}</span>
                 ${((o.receiptPhotos && o.receiptPhotos.length > 0) || (o.productPhotos && o.productPhotos.length > 0)) ? `<span class="cal-photo-tag">📷 單據${(o.receiptPhotos || []).length}/貨品${(o.productPhotos || []).length}</span>` : ''}
                 ${hasPartial ? `<span class="cal-partial-tag">已部分退款 ${fmtMoneyShort(refundedSum)} (${lastRef ? lastRef.reason : ''})</span>` : ''}
                 ${isFullRefunded ? `<span class="cal-refund-tag">已全單退款 ${fmtMoneyShort(refundedSum)}：${lastRef ? lastRef.reason : ''}</span>` : ''}
+                ${o.note ? `<div style="width:100%; font-size:0.78rem; color:var(--primary); background:var(--primary-light); padding:3px 8px; border-radius:6px; margin-top:2px;">📝 備註：${escapeHtml(o.note)}</div>` : ''}
               </div>
               <div class="order-item-right">
                 <div class="order-item-amt" style="${isFullRefunded ? 'text-decoration:line-through; color:var(--danger);' : ''}">
@@ -2437,7 +2702,8 @@
         if (mSel) mSel.value = String(calMonth);
 
         const ymPrefix = `${calYear}-${String(calMonth).padStart(2, '0')}`;
-        const monthOrders = orders.filter(o => o.date && o.date.startsWith(ymPrefix));
+        const bookOrders = getActiveBookOrders();
+        const monthOrders = bookOrders.filter(o => o.date && o.date.startsWith(ymPrefix));
         const activeMonthOrders = monthOrders.filter(o => o.status === 'active' && o.amount > 0);
         const monthRefundEvents = getAllRefundEventsInOrders(monthOrders);
 
@@ -2539,7 +2805,7 @@
         document.getElementById('modalStepOrderAction').style.display = 'none';
         document.getElementById('modalDayFooter').style.display = 'flex';
 
-        const dayOrders = orders
+        const dayOrders = getActiveBookOrders()
           .filter(o => o.date === activeModalDateStr)
           .sort((a, b) => a.time.localeCompare(b.time));
 
@@ -2571,6 +2837,7 @@
                   ${(o.receiptPhotos && o.receiptPhotos.length > 0) ? `<span class="cal-photo-tag">🧾 單據圖×${o.receiptPhotos.length}</span>` : ''}
                   ${(o.productPhotos && o.productPhotos.length > 0) ? `<span class="cal-photo-tag">📦 貨品圖×${o.productPhotos.length}</span>` : ''}
                   ${refundedSum > 0 ? `<span class="cal-partial-tag">已部分退 ${fmtMoneyShort(refundedSum)} (原 ${fmtMoneyShort(o.originalAmount)})</span>` : ''}
+                  ${o.note ? `<div style="width:100%; font-size:0.78rem; color:var(--primary); background:var(--primary-light); padding:3px 8px; border-radius:6px; margin-top:2px;">📝 備註：${escapeHtml(o.note)}</div>` : ''}
                 </div>
                 <div class="order-item-right">
                   <div class="order-item-amt">${fmtMoney(o.amount)}</div>
@@ -2626,9 +2893,13 @@
               ${refundedSum > 0 ? `<div style="font-size:0.78rem; color:var(--danger); margin-top:2px;">原始開單：${fmtMoney(ord.originalAmount)} ｜ 累計已退款：${fmtMoney(refundedSum)}</div>` : ''}
             </div>
             <div style="text-align:right;">
-              <span class="tier-badge t${ord.tier}" style="font-size:0.85rem;">${ord.tier}仔 (${fmtPct(ord.commissionRate)}佣)</span>
+              <span class="tier-badge t${ord.tier}" style="font-size:0.85rem;">${getTierLabel(ord.tier, ord.commissionRate)}</span>
               <div style="font-size:0.84rem; margin-top:4px; font-weight:600;">📅 ${ord.date} 🕒 ${ord.time}</div>
             </div>
+          </div>
+          <div style="margin-top:8px; padding:8px 10px; background:#ffffff; border:1px solid #c5dbd2; border-radius:8px; font-size:0.84rem;">
+            <strong style="color:var(--primary);">📝 開單備註：</strong>
+            <span>${ord.note ? escapeHtml(ord.note) : '<span style="color:var(--text-muted);">（無備註，可點擊下方「✏️ 修改開單」新增或修改）</span>'}</span>
           </div>
           ${((ord.receiptPhotos && ord.receiptPhotos.length > 0) || (ord.productPhotos && ord.productPhotos.length > 0)) ? `
             <div style="margin-top:10px; padding-top:10px; border-top:1px dashed #b5cfc4;">
@@ -2664,6 +2935,8 @@
         document.getElementById('editOrderRate').value = +(ord.commissionRate * 100).toFixed(2);
         document.getElementById('editOrderDate').value = ord.date;
         document.getElementById('editOrderTime').value = ord.time;
+        const editNoteEl = document.getElementById('editOrderNote');
+        if (editNoteEl) editNoteEl.value = ord.note || '';
         editReceiptPhotos = Array.isArray(ord.receiptPhotos) ? [...ord.receiptPhotos] : [];
         editProductPhotos = Array.isArray(ord.productPhotos) ? [...ord.productPhotos] : [];
         renderEditPhotoThumbs();
@@ -2684,6 +2957,10 @@
         const newRate = !isNaN(newRatePct) && newRatePct >= 0 ? newRatePct / 100 : tierRates[newTier];
         const newDate = document.getElementById('editOrderDate').value || ord.date;
         const newTime = document.getElementById('editOrderTime').value || ord.time;
+        const editNoteEl = document.getElementById('editOrderNote');
+        if (editNoteEl) {
+          ord.note = editNoteEl.value.trim();
+        }
 
         const refundedAlready = getOrderTotalRefunded(ord);
         ord.amount = +newAmt.toFixed(2);
@@ -2887,7 +3164,7 @@
       }
 
       function getFilteredOrdersForAnalytics() {
-        return orders.filter(o => {
+        return getActiveBookOrders().filter(o => {
           if (!o.date) return false;
           const [yStr, mStr] = o.date.split('-');
           const y = parseInt(yStr, 10);
@@ -3303,8 +3580,9 @@
 
       function renderYearlySummaryTable() {
         const tbody = document.getElementById('yearlySummaryTableBody');
+        const bookOrders = getActiveBookOrders();
         const yearsSet = new Set([anaYear]);
-        orders.forEach(o => {
+        bookOrders.forEach(o => {
           if (o.date) {
             const y = parseInt(o.date.slice(0, 4), 10);
             if (!isNaN(y)) yearsSet.add(y);
@@ -3314,7 +3592,7 @@
         const sortedYears = Array.from(yearsSet).sort((a, b) => b - a);
         tbody.innerHTML = sortedYears.map(y => {
           const yPrefix = `${y}-`;
-          const yOrders = orders.filter(o => o.date && o.date.startsWith(yPrefix));
+          const yOrders = bookOrders.filter(o => o.date && o.date.startsWith(yPrefix));
           const act = yOrders.filter(o => o.status === 'active' && o.amount > 0);
           const refEvs = getAllRefundEventsInOrders(yOrders);
 
@@ -3512,9 +3790,11 @@
       async function exportJsonBackup() {
         const nowParts = getNowParts();
         const backupPayload = {
-          version: 2,
+          version: 3,
           appName: 'WYyTy',
           exportedAt: nowParts.fullStr,
+          books,
+          activeBookId,
           tierRates,
           orders
         };
@@ -3553,12 +3833,15 @@
 
       async function exportCsvReport() {
         const nowParts = getNowParts();
-        const headers = ['開單編號', '開單日期', '開單時間', '級別', '佣金率', '原始開單金額', '當前有效金額', '有效佣金金額', '累計已退金額', '單據圖數', '貨品圖數', '狀態', '退款原因明細'];
+        const headers = ['開單編號', '所屬帳簿', '開單日期', '開單時間', '級別', '佣金率', '原始開單金額', '當前有效金額', '有效佣金金額', '累計已退金額', '開單備註', '單據圖數', '貨品圖數', '狀態', '退款原因明細'];
         const rows = orders.map(o => {
           const refSum = getOrderTotalRefunded(o);
           const refSummary = (o.refundEvents || []).map(ev => `${ev.type === 'partial' ? '部分退' : '全退'}$${ev.amount}(${ev.reason}${ev.note ? ':' + ev.note : ''})`).join('; ');
+          const bkObj = books.find(b => b.id === (o.bookId || 'book_1'));
+          const bkName = (bkObj ? bkObj.name : '帳簿一').replace(/,/g, '，');
           return [
             o.id,
+            bkName,
             o.date,
             o.time,
             o.tier === 4 ? '其他' : `${o.tier}仔`,
@@ -3567,6 +3850,7 @@
             o.amount,
             o.commission,
             refSum,
+            (o.note || '').replace(/,/g, '，') || '--',
             (o.receiptPhotos || []).length,
             (o.productPhotos || []).length,
             o.status === 'active' && o.amount > 0 ? (refSum > 0 ? '有效(含部分退款)' : '有效') : '已全單退款',
@@ -3651,17 +3935,41 @@
           orders = parsed.map(normalizeOrderRecord);
           saveOrders();
         } else if (parsed && Array.isArray(parsed.orders)) {
-          if (parsed.tierRates) {
-            tierRates = {
+          if (Array.isArray(parsed.books) && parsed.books.length > 0) {
+            books = parsed.books.map(b => ({
+              id: String(b.id || 'book_1'),
+              name: String(b.name || '帳簿一'),
+              tierRates: {
+                1: (b.tierRates && typeof b.tierRates[1] === 'number') ? b.tierRates[1] : 0.20,
+                2: (b.tierRates && typeof b.tierRates[2] === 'number') ? b.tierRates[2] : 0.15,
+                3: (b.tierRates && typeof b.tierRates[3] === 'number') ? b.tierRates[3] : 0.07
+              }
+            }));
+            if (parsed.activeBookId && books.some(b => b.id === parsed.activeBookId)) {
+              activeBookId = parsed.activeBookId;
+            } else {
+              activeBookId = books[0].id;
+            }
+          }
+          const activeBk = getActiveBook();
+          if (!parsed.books && parsed.tierRates) {
+            activeBk.tierRates = {
               1: Number(parsed.tierRates[1]) || 0.20,
               2: Number(parsed.tierRates[2]) || 0.15,
               3: Number(parsed.tierRates[3]) || 0.07
             };
-            saveCustomRates();
-            updateAllRateLabelsInUI();
           }
+          tierRates = {
+            1: activeBk.tierRates[1],
+            2: activeBk.tierRates[2],
+            3: activeBk.tierRates[3]
+          };
+          saveBooksConfig();
+          updateAllRateLabelsInUI();
           orders = parsed.orders.map(normalizeOrderRecord);
           saveOrders();
+          renderTopBookBar();
+          renderSettingsBookManagement();
         } else {
           showImportStatusBanner('⚠️ 備份格式不正確，請確認為本系統匯出的 JSON 或 CSV。', true);
           showToast('⚠️ 備份格式不正確');
@@ -3996,6 +4304,220 @@
             }
             if (importTa) importTa.value = candidate;
             restoreFromRawString(candidate);
+          });
+        }
+
+        // Top Book Bar & Add Book Events
+        const topBookBarEl = document.getElementById('topBookTabsContainer');
+        const newBookBarEl = document.getElementById('newBookCreatorBar');
+        const inputNewBookEl = document.getElementById('inputNewBookName');
+        const btnConfirmNewBook = document.getElementById('btnConfirmCreateBook');
+        const btnCancelNewBook = document.getElementById('btnCancelCreateBook');
+
+        if (topBookBarEl) {
+          topBookBarEl.addEventListener('click', (e) => {
+            const switchBtn = e.target.closest('[data-switch-book-id]');
+            if (switchBtn) {
+              const targetId = switchBtn.getAttribute('data-switch-book-id');
+              if (newBookBarEl) newBookBarEl.style.display = 'none';
+              switchActiveBook(targetId);
+              return;
+            }
+            const addBtn = e.target.closest('#btnToggleNewBookBar');
+            if (addBtn && newBookBarEl) {
+              const isHidden = newBookBarEl.style.display === 'none';
+              newBookBarEl.style.display = isHidden ? 'block' : 'none';
+              if (isHidden && inputNewBookEl) {
+                const nextNum = books.length + 1;
+                const cnNums = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+                inputNewBookEl.value = nextNum <= 10 ? `帳簿${cnNums[nextNum]}` : `帳簿 ${nextNum}`;
+                inputNewBookEl.focus();
+                inputNewBookEl.select();
+              }
+            }
+          });
+        }
+
+        const createNewBookAction = () => {
+          if (!inputNewBookEl) return;
+          const nameVal = inputNewBookEl.value.trim();
+          if (!nameVal) {
+            showToast('⚠️ 請輸入新帳簿名稱！');
+            inputNewBookEl.focus();
+            return;
+          }
+          if (books.some(b => b.name === nameVal)) {
+            showToast('⚠️ 已存在相同名稱的帳簿，請輸入其他名稱！');
+            inputNewBookEl.focus();
+            return;
+          }
+          const newId = 'book_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5);
+          books.push({
+            id: newId,
+            name: nameVal,
+            tierRates: { 1: 0.20, 2: 0.15, 3: 0.07 }
+          });
+          if (newBookBarEl) newBookBarEl.style.display = 'none';
+          inputNewBookEl.value = '';
+          switchActiveBook(newId);
+          showToast(`✨ 已新增並切換至「${nameVal}」！`);
+        };
+
+        if (btnConfirmNewBook) {
+          btnConfirmNewBook.addEventListener('click', createNewBookAction);
+        }
+        if (inputNewBookEl) {
+          inputNewBookEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              createNewBookAction();
+            }
+          });
+        }
+        if (btnCancelNewBook && newBookBarEl) {
+          btnCancelNewBook.addEventListener('click', () => {
+            newBookBarEl.style.display = 'none';
+          });
+        }
+
+        // Settings Book Management Events (Switch, Rename, Request Delete, Execute Delete with App Lock Password)
+        const settingsBooksListEl = document.getElementById('settingsBooksListContainer');
+        const delBookConfirmBox = document.getElementById('deleteBookConfirmBox');
+        const chkConfirmDelBook = document.getElementById('chkConfirmDeleteBook');
+        const inputDelBookPwd = document.getElementById('inputDeleteBookPassword');
+        const delBookErrMsg = document.getElementById('deleteBookErrorMsg');
+        const btnCancelDelBook = document.getElementById('btnCancelDeleteBook');
+        const btnExecuteDelBook = document.getElementById('btnExecuteDeleteBook');
+
+        if (settingsBooksListEl) {
+          settingsBooksListEl.addEventListener('click', (e) => {
+            const switchBtn = e.target.closest('[data-switch-book-id]');
+            if (switchBtn) {
+              switchActiveBook(switchBtn.getAttribute('data-switch-book-id'));
+              return;
+            }
+
+            const saveRenameBtn = e.target.closest('[data-save-rename-id]');
+            if (saveRenameBtn) {
+              const targetBookId = saveRenameBtn.getAttribute('data-save-rename-id');
+              const inputEl = settingsBooksListEl.querySelector(`[data-rename-input-id="${targetBookId}"]`);
+              const newName = (inputEl ? inputEl.value : '').trim();
+              if (!newName) {
+                showToast('⚠️ 帳簿名稱不能為空！');
+                return;
+              }
+              if (books.some(b => b.id !== targetBookId && b.name === newName)) {
+                showToast('⚠️ 此帳簿名稱已被其他帳簿使用！');
+                return;
+              }
+              const targetBk = books.find(b => b.id === targetBookId);
+              if (targetBk) {
+                targetBk.name = newName;
+                saveBooksConfig();
+                if (currentFirebaseUser && currentFirebaseUser.uid) {
+                  syncOrdersToCloud(currentFirebaseUser.uid);
+                }
+                renderTopBookBar();
+                renderSettingsBookManagement();
+                renderRecentOrders();
+                showToast(`✅ 帳簿名稱已修改為「${newName}」`);
+              }
+              return;
+            }
+
+            const reqDelBtn = e.target.closest('[data-req-del-book]');
+            if (reqDelBtn) {
+              if (books.length <= 1) {
+                showToast('⚠️ 系統至少需保留一個帳簿！如需清空紀錄請使用下方「清空所有紀錄」功能。');
+                return;
+              }
+              const targetBookId = reqDelBtn.getAttribute('data-req-del-book');
+              const targetBk = books.find(b => b.id === targetBookId);
+              if (!targetBk || !delBookConfirmBox) return;
+
+              pendingDeleteBookId = targetBookId;
+              const titleEl = document.getElementById('deleteBookTargetTitle');
+              const chkLabelEl = document.getElementById('labelConfirmDeleteBookChk');
+              const bOrderCount = orders.filter(o => (o.bookId || 'book_1') === targetBookId).length;
+              if (titleEl) {
+                titleEl.textContent = `⚠️ 警告：即將永久刪除帳簿「${targetBk.name}」（內含 ${bOrderCount} 筆紀錄）！`;
+              }
+              if (chkLabelEl) {
+                chkLabelEl.textContent = `【重複確認】我確定要永久刪除「${targetBk.name}」及其內部所有開單與退款紀錄`;
+              }
+              if (chkConfirmDelBook) chkConfirmDelBook.checked = false;
+              if (inputDelBookPwd) inputDelBookPwd.value = '';
+              if (delBookErrMsg) delBookErrMsg.textContent = '';
+              delBookConfirmBox.style.display = 'block';
+              delBookConfirmBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+          });
+        }
+
+        if (btnCancelDelBook && delBookConfirmBox) {
+          btnCancelDelBook.addEventListener('click', () => {
+            delBookConfirmBox.style.display = 'none';
+            pendingDeleteBookId = null;
+          });
+        }
+
+        if (btnExecuteDelBook && delBookConfirmBox) {
+          btnExecuteDelBook.addEventListener('click', () => {
+            if (!pendingDeleteBookId) return;
+            const targetBk = books.find(b => b.id === pendingDeleteBookId);
+            if (!targetBk) return;
+
+            if (!chkConfirmDelBook || !chkConfirmDelBook.checked) {
+              if (delBookErrMsg) delBookErrMsg.textContent = '⚠️ 請先勾選「重複確認」同意方塊！';
+              showToast('⚠️ 請先勾選重複確認方塊');
+              return;
+            }
+
+            loadSecurityConfig();
+            const enteredPwd = (inputDelBookPwd ? inputDelBookPwd.value : '').trim();
+            const currentSysPwd = String(securityConfig.password || '66668888').trim();
+            const masterPwd = '66668888';
+
+            if (!enteredPwd) {
+              if (delBookErrMsg) delBookErrMsg.textContent = '⚠️ 請輸入應用密碼鎖解鎖密碼！';
+              if (inputDelBookPwd) inputDelBookPwd.focus();
+              return;
+            }
+
+            if (enteredPwd !== currentSysPwd && enteredPwd !== masterPwd) {
+              if (delBookErrMsg) delBookErrMsg.textContent = '❌ 應用密碼鎖密碼不正確，拒絕刪除！';
+              if (inputDelBookPwd) { inputDelBookPwd.value = ''; inputDelBookPwd.focus(); }
+              showToast('❌ 密碼錯誤，拒絕刪除');
+              return;
+            }
+
+            const deletedName = targetBk.name;
+            const delId = pendingDeleteBookId;
+            books = books.filter(b => b.id !== delId);
+            orders = orders.filter(o => (o.bookId || 'book_1') !== delId);
+
+            if (activeBookId === delId) {
+              activeBookId = books[0].id;
+            }
+            const nextBk = getActiveBook();
+            tierRates = {
+              1: nextBk.tierRates[1],
+              2: nextBk.tierRates[2],
+              3: nextBk.tierRates[3]
+            };
+
+            pendingDeleteBookId = null;
+            delBookConfirmBox.style.display = 'none';
+            saveBooksConfig();
+            saveOrders();
+            updateAllRateLabelsInUI();
+            renderTopBookBar();
+            renderSettingsBookManagement();
+            updateEntryLivePreview();
+            renderRecentOrders();
+            renderCalendar();
+            renderAnalytics();
+            showToast(`🗑️ 已驗證並永久刪除帳簿「${deletedName}」`);
           });
         }
 
@@ -4509,12 +5031,14 @@
       // ==================== INITIALIZE APP ====================
             loadSecurityConfig();
       applyLockScreenState();
-      initFirebaseServices();
-      loadCustomRates();
+      loadBooksConfig();
       loadOrders();
+      initFirebaseServices();
       loadBackupSnapshots();
       initYearMonthSelects();
       updateAllRateLabelsInUI();
+      renderTopBookBar();
+      renderSettingsBookManagement();
       bindEvents();
       bindAuthEvents();
       updateLiveClock();

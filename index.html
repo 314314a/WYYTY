@@ -67,13 +67,40 @@
     </div>
   </header>
 
-  <!-- Navigation Tabs -->
+  <!-- Navigation Tabs & Upper Ledger Book Bar -->
   <nav class="nav-bar">
+    <!-- 上層：帳簿切換與新增列 -->
+    <div class="book-bar-wrap">
+      <div class="book-bar-inner" id="topBookTabsContainer"></div>
+      <!-- 新增帳簿輸入小面板 -->
+      <div id="newBookCreatorBar" style="display:none; max-width:1120px; margin:6px auto 0; padding:8px 10px; background:#ffffff; border:1.5px solid var(--primary); border-radius:10px;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <strong style="font-size:0.82rem; color:var(--primary); white-space:nowrap;">➕ 新增帳簿：</strong>
+          <input type="text" id="inputNewBookName" class="input-text" placeholder="請輸入新帳簿名稱 (例如：帳簿二、分店A)" maxlength="24" style="flex:1; min-width:150px; padding:6px 10px; font-size:0.85rem;" />
+          <button type="button" class="btn btn-primary" id="btnConfirmCreateBook" style="padding:6px 12px; font-size:0.8rem;">✅ 確認建立</button>
+          <button type="button" class="btn btn-secondary" id="btnCancelCreateBook" style="padding:6px 10px; font-size:0.8rem;">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 下層：四個主功能按鈕（兩排顯示：第一排圖案、第二排文字單行自適應） -->
     <div class="nav-inner">
-      <button type="button" class="nav-btn active" data-view="entry">📝 輸入開單</button>
-      <button type="button" class="nav-btn" data-view="calendar">📅 月曆紀錄</button>
-      <button type="button" class="nav-btn" data-view="analytics">📊 數據分析</button>
-      <button type="button" class="nav-btn" data-view="backup">👤 登入與設定</button>
+      <button type="button" class="nav-btn active" data-view="entry">
+        <span class="nav-btn-icon">📝</span>
+        <span class="nav-btn-text">開單</span>
+      </button>
+      <button type="button" class="nav-btn" data-view="calendar">
+        <span class="nav-btn-icon">📅</span>
+        <span class="nav-btn-text">月曆記錄</span>
+      </button>
+      <button type="button" class="nav-btn" data-view="analytics">
+        <span class="nav-btn-icon">📊</span>
+        <span class="nav-btn-text">數據分析</span>
+      </button>
+      <button type="button" class="nav-btn" data-view="backup">
+        <span class="nav-btn-icon">👤</span>
+        <span class="nav-btn-text">登入/設定</span>
+      </button>
     </div>
   </nav>
 
@@ -84,7 +111,7 @@
     <section id="view-entry" class="view-section active">
       <div class="card">
         <div class="card-header">
-          <div class="card-title">📝 新增開單</div>
+          <div class="card-title">📝 新增開單 <span id="entryActiveBookBadge" class="tier-badge t1" style="margin-left:6px; font-size:0.78rem;">📚 帳簿一</span></div>
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <button type="button" class="btn btn-secondary" id="btnToggleRateConfig" style="display:none !important;">
               ⚙️ 修改默認佣金% (<span id="headerRateSummary">20% / 15% / 7%</span>)
@@ -320,6 +347,12 @@
         </div>
 
         
+        <!-- Order Note (開單備註) Section -->
+        <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--bg-subtle);">
+          <label class="form-label" for="entryNoteInput">📝 開單備註（選填，可於月曆點選單據查看及修改）</label>
+          <input type="text" id="entryNoteInput" class="input-text" placeholder="請輸入備註內容（如客患姓名、藥方明細或特別事項...）" maxlength="200" />
+        </div>
+
         <!-- Photo Upload Section: 開單單據 & 貨品圖片 (支援拍照或選取圖片) -->
         <div class="photo-upload-section">
           <label class="form-label">📷 上傳開單單據及貨品圖片（選填，支援手機直接拍照或從相簿選取圖片，離線自動壓縮保存）</label>
@@ -761,13 +794,50 @@
         </div>
       </div>
 
-      <!-- Commission Rate Settings in Backup/Settings Tab too -->
+      <!-- Multi-Book Management Card (修改帳簿名稱 / 雙重確認+密碼驗證刪除帳簿) -->
+      <div class="card" id="bookManagementCard">
+        <div class="card-header">
+          <div class="card-title">📚 帳簿管理（修改名稱或刪除帳簿）</div>
+          <span class="tier-badge t1" id="settingsActiveBookLabel">目前使用：帳簿一</span>
+        </div>
+        <p style="font-size:0.84rem; color:var(--text-muted); margin-bottom:12px;">
+          每個帳簿的開單紀錄、月曆統計、數據分析及默認佣金率均各自獨立計算。您可在此修改各帳簿名稱或刪除帳簿。
+        </p>
+        <div id="settingsBooksListContainer"></div>
+
+        <!-- 刪除帳簿：重複確認 + 輸入應用密碼鎖解鎖密碼視窗 -->
+        <div id="deleteBookConfirmBox" style="display:none; margin-top:14px; padding:16px; background:var(--danger-bg); border:2px solid #ef4444; border-radius:12px;">
+          <div style="font-weight:800; font-size:0.96rem; color:var(--danger); margin-bottom:6px;" id="deleteBookTargetTitle">
+            ⚠️ 警告：即將永久刪除帳簿！
+          </div>
+          <div style="font-size:0.82rem; color:#7f1d1d; margin-bottom:12px;">
+            刪除後，該帳簿內的所有開單與退款紀錄將被移除且無法復原。請完成以下重複確認並輸入<strong>應用密碼鎖密碼</strong>：
+          </div>
+          <label style="display:flex; align-items:center; gap:8px; margin-bottom:12px; font-size:0.85rem; font-weight:700; color:#991b1b; cursor:pointer;">
+            <input type="checkbox" id="chkConfirmDeleteBook" />
+            <span id="labelConfirmDeleteBookChk">【重複確認】我確定要永久刪除此帳簿及其內部所有紀錄</span>
+          </label>
+          <div style="margin-bottom:12px;">
+            <label class="form-label" for="inputDeleteBookPassword" style="color:#991b1b; margin-bottom:4px;">
+              請輸入應用密碼鎖解鎖密碼以授權刪除：
+            </label>
+            <input type="password" id="inputDeleteBookPassword" class="input-text" placeholder="請輸入應用密碼鎖密碼" style="max-width:300px; border-color:#f87171;" />
+            <div id="deleteBookErrorMsg" style="color:var(--danger); font-size:0.8rem; font-weight:700; margin-top:4px;"></div>
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary" id="btnCancelDeleteBook">取消</button>
+            <button type="button" class="btn btn-danger" id="btnExecuteDeleteBook">🗑️ 確認驗證並刪除帳簿</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Commission Rate Settings in Backup/Settings Tab too (獨立保存至當前帳簿) -->
       <div class="card">
         <div class="card-header">
-          <div class="card-title">⚙️ 默認佣金百分比 (%) 設置</div>
+          <div class="card-title">⚙️ 默認佣金百分比 (%) 設置 <span id="commCardBookBadge" class="tier-badge t1" style="margin-left:6px; font-size:0.78rem;">帳簿一</span></div>
         </div>
         <p style="font-size:0.86rem; color:var(--text-muted); margin-bottom:12px;">
-          可隨時自訂 1仔、2仔、3仔 的佣金百分比。修改儲存後即成為系統默認值，日後新輸入的開單將自動按新百分比計算。
+          每個帳簿可各自設定並保存不同的 1仔、2仔、3仔 默認佣金百分比。修改儲存後將套用至目前選取的帳簿。
         </p>
         <div class="grid-3" style="margin-bottom:12px;">
           <div class="tier-box t1">
@@ -966,6 +1036,10 @@
               <label class="form-label" for="editOrderTime">開單時間 (HH:MM)</label>
               <input type="time" id="editOrderTime" class="input-text" />
             </div>
+          </div>
+          <div class="form-group" style="margin-top:6px; margin-bottom:8px;">
+            <label class="form-label" for="editOrderNote">📝 開單備註（可查看或修改）</label>
+            <input type="text" id="editOrderNote" class="input-text" placeholder="輸入或修改此單備註內容..." maxlength="200" />
           </div>
           <!-- Edit Order Photos (查看、新增拍照/選取圖片、或刪除原有單據及貨品圖片) -->
           <div style="margin-top:10px; padding-top:10px; border-top:1px dashed var(--border);">
